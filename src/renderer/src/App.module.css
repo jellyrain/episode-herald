@@ -242,6 +242,12 @@
 .settingRow input[type='time'] { width: 110px; }
 .dataLocation { display: grid; gap: 5px; padding: 13px 0; min-width: 0; }
 .dataLocation code { color: var(--muted); overflow-wrap: anywhere; user-select: text; font-size: 12px; }
+.cachePanel { padding: 14px 0; font-size: 13px; }
+.cacheHeading { display: flex; align-items: center; gap: 12px; }
+.cacheBreakdown { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 12px 0 6px; }
+.cacheBreakdown dt, .cachePanel p { color: var(--muted); font-size: 12px; }
+.cacheBreakdown dd { margin: 3px 0 0; color: var(--text); font-variant-numeric: tabular-nums; }
+.cachePanel p { margin: 8px 0; }
 .draftBar { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding: 8px 14px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 12px; }
 .error { display: flex; align-items: flex-start; gap: 8px; border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--line)); padding: 10px 12px; margin-bottom: 12px; border-radius: 6px; color: var(--warning); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .error svg, .toast svg { flex: none; }

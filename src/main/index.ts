@@ -218,6 +218,8 @@ function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdat
     })
   }
   handle('snapshot', () => service.snapshot())
+  handle('cache-usage', updates.cacheUsage)
+  handle('cache-clear', updates.clearCache)
   handle('push-panel', () => push.panel())
   handle('save-qq', value => push.save(value))
   handle('check-qq', () => push.checkConnection())

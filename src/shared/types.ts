@@ -153,7 +153,23 @@ export interface AppUpdate {
   percent?: number
 }
 
+export interface CacheUsage {
+  updates: number
+  covers: number
+  web: number
+  updatesBusy: boolean
+  skipped: number
+}
+
+export interface CacheCleanup {
+  freed: number
+  skipped: number
+  usage: CacheUsage
+}
+
 export interface HongguoAPI {
+  cacheUsage(): Promise<Result<CacheUsage>>
+  clearCache(): Promise<Result<CacheCleanup>>
   pushPanel(): Promise<Result<PushPanel>>
   saveQqPush(config: QqPushDraft): Promise<Result<PushPanel>>
   checkQqConnection(): Promise<Result<string>>

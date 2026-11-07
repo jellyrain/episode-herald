@@ -1,8 +1,9 @@
-import { app } from 'electron'
+import { app, session } from 'electron'
 import electronUpdater from 'electron-updater'
 import { join } from 'node:path'
-import type { AppUpdate } from '../shared/types'
+import type { AppUpdate, CacheCleanup, CacheUsage } from '../shared/types'
 import { downloadPortable, installPortable, nextPortable } from './portable-update'
+import { AppCache } from './cache'
 
 class InstalledUpdater extends electronUpdater.NsisUpdater {
   constructor(cache: string) {
@@ -12,13 +13,21 @@ class InstalledUpdater extends electronUpdater.NsisUpdater {
   }
 }
 
-export function createAppUpdates(dataPath: string, portable: boolean, changed: (state: AppUpdate) => void) {
+export function createAppUpdates(dataPath: string, portable: boolean, changed: (state: AppUpdate) => void): {
+  status(): AppUpdate
+  check(): AppUpdate
+  install(): Promise<void>
+  cacheUsage(): Promise<CacheUsage>
+  clearCache(): Promise<CacheCleanup>
+} {
   const currentVersion = app.getVersion()
   const cache = join(dataPath, 'update-cache')
   const supported = app.isPackaged && process.platform === 'win32'
   const updater = supported && !portable ? new InstalledUpdater(cache) : null
   let downloaded: { info: NonNullable<Awaited<ReturnType<typeof nextPortable>>>; archive: string } | null = null
   let state: AppUpdate = { currentVersion, portable, phase: supported ? 'idle' : 'development' }
+  const updateBusy = (): boolean => ['checking', 'downloading', 'ready', 'installing'].includes(state.phase)
+  const storage = new AppCache(dataPath, currentVersion, updateBusy, session.defaultSession)
   const publish = (details: Omit<AppUpdate, 'currentVersion' | 'portable'>): void => {
     state = { currentVersion, portable, ...details }
     changed(state)
@@ -38,7 +47,11 @@ export function createAppUpdates(dataPath: string, portable: boolean, changed: (
     publish({ phase: 'ready', version: info.version })
   }
   function check(): AppUpdate {
-    if (!supported || ['checking', 'downloading', 'ready', 'installing'].includes(state.phase)) return state
+    if (!supported || updateBusy()) return state
+    if (storage.clearing) {
+      void storage.clearing.then(check, check)
+      return state
+    }
     publish({ phase: 'checking' })
     if (updater) void updater.checkForUpdates().then(result => result?.downloadPromise).catch(failed)
     else void checkPortable().catch(failed)
@@ -66,6 +79,8 @@ export function createAppUpdates(dataPath: string, portable: boolean, changed: (
   }
   return {
     status: () => state,
+    cacheUsage: () => storage.usage(),
+    clearCache: () => storage.clear(),
     check,
     async install(): Promise<void> {
       if (state.phase !== 'ready') throw new Error('没有可安装的应用更新。')

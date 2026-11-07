@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppUpdate, HongguoAPI } from '../shared/types'
 
 const api: HongguoAPI = {
+  cacheUsage: () => ipcRenderer.invoke('hongguo:cache-usage'),
+  clearCache: () => ipcRenderer.invoke('hongguo:cache-clear'),
   pushPanel: () => ipcRenderer.invoke('hongguo:push-panel'),
   saveQqPush: config => ipcRenderer.invoke('hongguo:save-qq', config),
   checkQqConnection: () => ipcRenderer.invoke('hongguo:check-qq'),
