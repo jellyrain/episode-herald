@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { Monitor, type MonitorProvider } from '../src/main/monitor'
@@ -91,7 +90,7 @@ class FakeProvider implements MonitorProvider {
 }
 
 function fixture(context: TestContext): { monitor: Monitor; provider: FakeProvider; notices: string[]; dataPath: string } {
-  const dataPath = mkdtempSync(join(tmpdir(), 'hongguo-monitor-test-'))
+  const dataPath = mkdtempSync(join(__dirname, 'hongguo-monitor-test-'))
   const provider = new FakeProvider()
   const notices: string[] = []
   const monitor = new Monitor(dataPath, () => undefined, (title) => notices.push(title), provider)

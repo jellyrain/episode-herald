@@ -30,12 +30,13 @@ function SoftwareUpdate(): React.JSX.Element {
   }, [])
   if (!status) return <></>
   const descriptions: Record<AppUpdate['phase'], string> = {
-    development: 'Windows 安装版支持自动更新。',
-    idle: '新版本会在后台下载，退出时安装。',
+    development: '发布版支持自动更新。',
+    idle: status.portable ? '新版本会在后台下载，可在这里重启更新。' : '新版本会在后台下载，退出时安装。',
     checking: '正在检查新版本…',
     current: '已是最新版本。',
     downloading: `正在下载 v${status.version} · ${status.percent ?? 0}%`,
-    ready: `v${status.version} 已下载，退出时将自动安装。`,
+    ready: status.portable ? `v${status.version} 已下载，重启即可更新。` : `v${status.version} 已下载，退出时将自动安装。`,
+    installing: '正在准备更新，请稍候…',
     error: '检查或下载失败，请稍后重试。'
   }
   async function act(): Promise<void> {
@@ -50,7 +51,7 @@ function SoftwareUpdate(): React.JSX.Element {
   return <section>
     <h2>软件更新</h2>
     <SettingRow id="software-update" label={`当前版本 v${status.currentVersion}`} hint={error || descriptions[status.phase]}>
-      {status.phase !== 'development' && <Button variant="soft" disabled={['checking', 'downloading'].includes(status.phase)} onClick={() => void act()}>
+      {status.phase !== 'development' && <Button variant="soft" disabled={['checking', 'downloading', 'installing'].includes(status.phase)} onClick={() => void act()}>
         {status.phase === 'ready' ? '重启并安装' : '检查软件更新'}
       </Button>}
     </SettingRow>

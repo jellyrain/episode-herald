@@ -1,0 +1,6 @@
+diff --git a/templates/nsis/include/installer.nsh b/templates/nsis/include/installer.nsh
+--- a/templates/nsis/include/installer.nsh
++++ b/templates/nsis/include/installer.nsh
+@@ -93,1 +93,1 @@
+-      !insertmacro copyFile "$EXEPATH" "$LOCALAPPDATA\${APP_INSTALLER_STORE_FILE}"
++      !insertmacro copyFile "$EXEPATH" "$INSTDIR\data\update-cache\${APP_INSTALLER_STORE_FILE}"

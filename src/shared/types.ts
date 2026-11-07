@@ -102,7 +102,8 @@ export interface Snapshot {
 }
 
 export interface AppUpdate {
-  phase: 'development' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'
+  phase: 'development' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'installing' | 'error'
+  portable: boolean
   currentVersion: string
   version?: string
   percent?: number

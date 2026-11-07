@@ -34,10 +34,23 @@ jobs:
       - run: pnpm build
       - name: Package Windows x64
         run: pnpm exec electron-builder --win nsis --x64 --publish never
+      - name: Create portable folder ZIP
+        run: ./scripts/package-portable.ps1
       - name: Verify installer and update feed
         run: ./scripts/verify-windows-release.ps1
       - name: Start the packaged application
         run: node scripts/smoke-windows-release.mjs
+      - name: Verify extracted portable edition
+        run: |
+          $metadata = Get-Content dist/latest-portable.json -Raw | ConvertFrom-Json
+          $zip = Get-Item "dist/$($metadata.file)"
+          if ($zip.Length -ne $metadata.bytes -or (Get-FileHash $zip.FullName -Algorithm SHA512).Hash.ToLowerInvariant() -cne $metadata.sha512) { throw 'Invalid portable feed' }
+          [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, (Join-Path $PWD 'dist/acceptance'))
+          node scripts/smoke-windows-release.mjs dist/acceptance/episode-herald portable
+      - name: Verify installed data survives upgrade and uninstall
+        run: ./scripts/verify-installed-data.ps1
+      - name: Verify portable replacement and recovery
+        run: ./scripts/verify-portable-upgrade.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
@@ -46,6 +59,8 @@ jobs:
             dist/*-setup.exe
             dist/*-setup.exe.blockmap
             dist/latest.yml
+            dist/*-portable.zip
+            dist/latest-portable.json
 
   release:
     needs: windows
@@ -63,5 +78,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/* --verify-tag --draft --title "追更小报 $GITHUB_REF_NAME" --notes "Windows x64 请下载 setup.exe。已安装的追更小报会自动检查并下载此版本。"
+          gh release create "$GITHUB_REF_NAME" release/* --verify-tag --draft --title "追更小报 $GITHUB_REF_NAME" --notes "Windows x64 提供免安装 ZIP 和安装版 EXE。请选择 C 盘以外的可写目录。两种版本均将追更记录、封面、日志及更新缓存保存在程序旁的 data 文件夹，并使用各自的自动更新通道。"
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest

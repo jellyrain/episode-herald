@@ -11,15 +11,16 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent
 } from 'electron'
-import { existsSync, mkdirSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import icon from '../../resources/icon.png?asset&asarUnpack'
 import windowsIcon from '../../build/icon.ico?asset&asarUnpack'
-import { name as projectName, productName } from '../../package.json'
+import { productName } from '../../package.json'
 import type { BrowseQuery, Result, Settings } from '../shared/types'
 import { Monitor } from './monitor'
 import { createAppUpdates } from './app-updates'
+import { configureDataPaths, importInstalledData } from './data-paths'
 import { CoverCache } from './covers'
 import { toUserMessage } from './provider'
 
@@ -27,23 +28,14 @@ const bundlePath = dirname(fileURLToPath(import.meta.url))
 protocol.registerSchemesAsPrivileged([{ scheme: 'hongguo-cover', privileges: { standard: true, secure: true } }])
 const rendererFile = join(bundlePath, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined
-const developmentDataPath = !app.isPackaged && process.env['HONGGUO_DATA_DIR']
-  ? resolve(process.env['HONGGUO_DATA_DIR'])
-  : undefined
-function resolveProfile(): string {
-  if (developmentDataPath) return developmentDataPath
-  const appData = app.getPath('appData')
-  const preferred = join(appData, projectName)
-  const previous = join(appData, 'hongguo-list')
-  if (!app.isPackaged) return !existsSync(preferred) && existsSync(previous) ? previous : preferred
-  // Use the existing database in place so backups and prior installations stay valid.
-  return [preferred, previous, join(appData, '红果追更')]
-    .find(directory => existsSync(join(directory, 'hongguo.sqlite'))) ?? preferred
-}
-const profile = resolveProfile()
-mkdirSync(profile, { recursive: true })
-app.setPath('userData', profile)
-app.setPath('sessionData', profile)
+const portable = app.isPackaged && existsSync(join(dirname(process.execPath), 'portable.json'))
+const paths = (() => {
+  try { return configureDataPaths() }
+  catch (error) {
+    dialog.showErrorBox('无法使用程序数据目录', error instanceof Error ? error.message : '请检查程序目录的写入权限。')
+    process.exit(1)
+  }
+})()
 const shellIcon = process.platform === 'win32' ? windowsIcon : icon
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -280,12 +272,12 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     app.setAppUserModelId('com.episodeherald.desktop')
     Menu.setApplicationMenu(null)
-    const dataPath = app.isPackaged ? app.getPath('userData') : developmentDataPath ?? join(app.getAppPath(), '.local-data')
-    mkdirSync(dataPath, { recursive: true })
+    const dataPath = paths.data
+    if (app.isPackaged && !portable) importInstalledData(paths.oldAppData, dataPath)
     const covers = new CoverCache(dataPath)
     protocol.handle('hongguo-cover', request => covers.respond(request))
     monitor = new Monitor(dataPath, emitChanged, notify)
-    const updates = createAppUpdates(state => {
+    const updates = createAppUpdates(dataPath, portable, state => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hongguo:app-update', state)
     })
     registerIpc(monitor, updates)

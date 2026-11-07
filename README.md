@@ -1,60 +1,42 @@
-# 追更小报（Episode Herald）
+<p align="center"><img src="resources/icon.png" alt="戴着报童帽的追更小报图标" width="88"></p>
 
-Windows 桌面追更管理器，关注红果作品的新季与新集。Electron + React + TypeScript + Radix Themes，参考万象工坊的墨金 / 月白主题与桌面布局。
+# 追更小报 · Episode Herald
 
-在 [GitHub Releases](https://github.com/jellyrain/episode-herald/releases/latest) 下载 Windows x64 安装程序。安装版在启动后及每隔 24 小时检查软件更新，自动下载正式版，完全退出时安装。也可在「软件设置 → 软件更新」中手动检查或重启安装。关闭到托盘会继续运行。
+追更小报是一款 Windows 桌面应用。把想追的红果短剧加入清单，报童每天替你查看有没有新集或新季，有更新就发桌面通知。追更清单、设置和更新记录都保存在自己的电脑上。
 
-<details>
-<summary>报童图标的 ImageGen 生成提示词</summary>
+[下载最新正式版](https://github.com/jellyrain/episode-herald/releases/latest) · [报告问题](https://github.com/jellyrain/episode-herald/issues) · [Apache 2.0 许可证](LICENSE)
 
-logo-brand。为桌面应用「追更小报」创作一枚方形应用图标，参考万象工坊头像里的黑墨印刷、象牙白纸色、圆润笔触与简洁椭圆眼。原创短发小报童，戴略歪的黑色报童帽，笑着朝画面右侧递出一份对折小报。让脸和帽檐占据大半画幅，小报用一块黑色头版插图和两道粗线表示，缩小后仍能看清轮廓。肩部自然出框，浅暖灰底，少许纸纹。无文字、无外框、无水印。
+## 下载与使用
 
-</details>
+Windows x64 有两种发行方式。请选择 **C 盘以外、当前用户可以写入的位置**，例如 `F:\Apps\episode-herald`。
 
-## 使用
+| 版本 | 使用方式 | 软件更新 |
+| --- | --- | --- |
+| **免安装版**（`*-portable.zip`） | 完整解压，双击文件夹里的 `episode-herald.exe` | 后台下载新版 ZIP，在「软件设置 → 软件更新」点「重启并安装」 |
+| **安装版**（`*-setup.exe`） | 运行安装向导，选择安装目录 | 后台下载新版，退出时安装，也可立即重启更新 |
 
-从工作区根目录进入工程后运行，Node 由 fnm 管理（`.node-version` 为 24.22.2）：
+打开「发现作品」，通过搜索、推荐、排行榜或分类筛选找到作品，加入「我的追更」。首次关注会记录已有分集，之后只提醒新增内容。你可以为单部作品暂停检查，或关闭关联新季追踪。
+
+默认每天 **09:00** 检查。关闭窗口会收起到系统托盘，继续按时工作；完全退出后，下次启动会补查错过的任务。「更新记录」可查看哪部作品更新了、增加了几集。
+
+## 本地数据与备份
+
+两个发行版都在可执行文件旁创建 `data/`。其中包括追更数据库、封面、匿名设备档案、浏览器缓存、日志、临时文件和软件更新缓存。实际路径可在「软件设置」底部查看。
+
+- **备份或换电脑**：从托盘完全退出，复制整个 `data/`。免安装版也可以连同整个程序文件夹一起移动。
+- **从 v1.0.0 安装版升级**：首次启动新版时，如果新目录中没有数据库，会从旧版用户目录导入追更记录、设置、匿名档案和封面。确认迁移成功后，可自行清理旧目录。
+- **从旧版切换到免安装版**：先退出旧版，将旧数据目录中的 `hongguo.sqlite` 及同名的 `-wal`、`-shm` 文件（如有）、`anonymous.json` 和 `covers/` 复制到免安装目录下的 `data/`，再启动应用。
+
+## 本地开发
+
+项目基于 Electron、React 和 TypeScript，使用 pnpm 管理依赖，通过 [openhongguo](https://github.com/beilunyang/openhongguo) 匿名读取作品及分集信息。红果接口发生变化时，发现或检查功能可能暂时不可用。
 
 ```powershell
-cd .\episode-herald
-fnm use
+git clone https://github.com/jellyrain/episode-herald.git
+cd episode-herald
+fnm use --install-if-missing
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-打开「发现作品」，通过推荐、排行榜、分类或搜索添加作品，支持批量选择。加入时读取现有各季及分集作为基线，不发送历史更新通知。之后按集 ID 比较新集，按作品 ID 比较关联新季；新季也会继续检查分集。
-
-「我的追更」支持立即检查、暂停、取消追更和作品详情；详情内可关闭关联季监控。「更新记录」保存新季和新集事件，可标记已读。「软件设置」可修改每日检查时间、桌面通知、托盘行为与主题。
-
-默认每天 09:00 按本机时间检查。应用运行时才会执行，启动和系统唤醒后会补查到期作品。点击关闭默认收起到系统托盘；托盘菜单可以完全退出。没有 Windows 开机自动启动功能。
-
-## 本地数据
-
-- 开发环境：工程目录下的 `.local-data/`。
-- 开发验证可以通过 `HONGGUO_DATA_DIR` 指定独立目录，数据库和 Chromium 缓存都会隔离；正式安装版忽略这个变量。
-- 安装后的应用：Electron 的 `userData` 目录；实际路径显示在设置中。
-- `hongguo.sqlite` 保存关注、逐季分集基线、更新事件、设置和最近检查状态。
-- `anonymous.json` 是 openhongguo 的匿名设备档案，与红果账号登录无关。
-
-开发数据与测试产物已排除出 Git 和安装包。备份时先退出应用，再复制整个数据目录（包含可能存在的 SQLite WAL 文件）。
-
-## 数据源边界
-
-openhongguo 固定为 0.2.0，只在主进程的 `src/main/provider.ts` 内加载；渲染界面只使用自有数据类型和受限 IPC。SDK 的 ESM 与 WASM 保持在原包内，升级时修改版本、适配层并重新验证后随应用发布。
-
-没有接入账号登录、视频播放或下载。当前推送为 Windows 桌面通知，未接入 QQ、邮件或其他外部消息服务。
-
-接口受匿名访问及平台变更影响，失败会显示原因并保留历史记录。分集列表为空、截断或缺失旧 ID 时会保留基线。已知季会继续检查。
-
-Windows 版会将红果 CDN 的 HEIC 封面解码为 JPEG 缩略图，保存在本地数据目录的 `covers/`。同一封面的签名更新后可复用缓存。首次转换依赖系统的 HEIF 解码支持。
-
-## 验证
-
-```powershell
-pnpm typecheck
-pnpm build
-pnpm test
-```
-
-`pnpm build` 仅构建代码，不生成安装包。`pnpm test` 使用 Node 自带测试运行器、假数据源及临时 SQLite，完全离线，不读取实际追更数据。真实接口的可用性、封面和系统通知需要另外验证，离线测试不能代替这些检查。
-
-主进程输出 `out/main/index.mjs`，预加载输出 `out/preload/index.js`。开发及发布使用同一套受限桥接 API；网络查询仅在主进程内执行。
+开发数据位于工程内的 `.local-data/`。在 Windows 上使用 `pnpm test` 运行离线测试，`pnpm build` 检查类型并编译，`pnpm run build:win` 在 `dist/` 生成安装包、免安装 ZIP 和更新清单。

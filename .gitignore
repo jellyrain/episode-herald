@@ -156,5 +156,7 @@ out
 .eslintcache
 *.log*
 .local-data/
+data/
+build/remove-program-files.nsh
 .test-build/
 test-results/

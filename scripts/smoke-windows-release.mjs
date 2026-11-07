@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
 
 // The CI runner is a fresh Windows account. Only the loopback debugger is reachable.
 const pkg = JSON.parse(await readFile('package.json', 'utf8'))
 const port = 19371
-const child = spawn(resolve('dist/win-unpacked', pkg.name + '.exe'), [
+const directory = resolve(process.argv[2] || 'dist/win-unpacked')
+const portable = process.argv[3] === 'portable'
+const child = spawn(join(directory, pkg.name + '.exe'), [
   '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port,
   '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
 ], { windowsHide: true, stdio: 'ignore' })
@@ -36,17 +38,22 @@ try {
     expression: `(async () => {
       const state = await window.hongguo.appUpdateStatus();
       const snapshot = await window.hongguo.snapshot();
-      return { title: document.title, update: state.value, connected: snapshot.ok };
+      return { title: document.title, update: state.value, data: snapshot.value?.dataPath };
     })()` } }))
   const result = (await reply).result
   assert.ok(!result.exceptionDetails, result.exceptionDetails?.exception?.description)
   const value = result.result.value
   assert.equal(value.title, pkg.productName)
-  assert.equal(value.connected, true)
+  assert.equal(value.data.toLowerCase(), join(directory, 'data').toLowerCase())
+  for (const path of ['hongguo.sqlite', 'chromium', 'update-cache', 'logs', 'temp', 'crashes']) {
+    await access(join(value.data, path))
+  }
+  assert.equal(value.update.portable, portable)
   assert.equal(value.update.currentVersion, pkg.version)
   assert.notEqual(value.update.phase, 'development')
   console.log('Packaged app, database and Windows updater verified.')
 } finally {
   socket?.close()
   child.kill()
+  if (child.exitCode === null && child.signalCode === null) await new Promise(ok => child.once('exit', ok))
 }

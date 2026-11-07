@@ -1,5 +1,6 @@
 appId: com.episodeherald.desktop
 electronDist: node_modules/electron/dist
+afterPack: scripts/after-pack.cjs
 publish:
   provider: generic
   url: https://github.com/jellyrain/episode-herald/releases/latest/download/
@@ -9,6 +10,7 @@ files:
   - out/**/*
   - resources/**/*
   - LICENSE
+  - NOTICE
 asarUnpack:
   - resources/**
   - out/main/**/*.ico
@@ -26,6 +28,7 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
+  runAfterFinish: false
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:

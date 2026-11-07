@@ -4,7 +4,7 @@
   "packageManager": "pnpm@11.22.0",
   "repository": "https://github.com/jellyrain/episode-herald.git",
   "productName": "追更小报",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "红果新季与新集追更管理器",
   "main": "./out/main/index.mjs",
   "scripts": {
@@ -19,7 +19,7 @@
     "build": "npm run typecheck && electron-vite build",
     "postinstall": "install-electron && electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
+    "build:win": "npm run build && electron-builder --win nsis --x64 --publish never && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux"
   },
