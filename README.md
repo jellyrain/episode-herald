@@ -6,6 +6,8 @@
 
 [下载最新正式版](https://github.com/jellyrain/episode-herald/releases/latest) · [报告问题](https://github.com/jellyrain/episode-herald/issues) · [Apache 2.0 许可证](LICENSE)
 
+> **使用前请阅读[免责声明](#免责声明)。** 追更小报是独立开发的第三方工具。通过本应用访问红果接口仅供个人学习和研究，请勿用于商业服务或大规模采集。
+
 ## 下载与使用
 
 Windows x64 有两种发行方式。请选择 **C 盘以外、当前用户可以写入的位置**，例如 `F:\Apps\episode-herald`。
@@ -40,3 +42,11 @@ pnpm dev
 ```
 
 开发数据位于工程内的 `.local-data/`，Electron 和打包工具的下载缓存位于 `.build-cache/`。在 Windows 上使用 `pnpm test` 运行离线测试，`pnpm build` 检查类型并编译，`pnpm run build:win` 在 `dist/` 生成安装包、免安装 ZIP 和更新清单。
+
+## 免责声明
+
+追更小报通过非官方 SDK openhongguo 查询作品目录和分集信息，用于追踪新季、新集。使用红果接口时，请遵守适用法律及平台使用规则。请勿利用本应用批量采集平台数据、对外提供收费查询服务，或从事侵犯他人权益的活动。参见 [openhongguo 的完整免责声明](https://github.com/beilunyang/openhongguo#免责声明)。
+
+作品、封面和简介等内容的权利归各自权利人所有。查看或缓存这些内容不代表获得转载、再分发或商业使用的授权。项目源代码按 [Apache License 2.0](LICENSE) 提供。
+
+更新提醒依赖平台返回的数据，可能因接口变更或网络故障而延迟或遗漏。具体上线时间请以红果平台为准。使用者应对自己的接口访问及内容使用行为负责。
