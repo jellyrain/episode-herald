@@ -18,12 +18,30 @@ export interface SeasonCard {
   title: string
   index?: number
   episodeCount?: number
+  heat?: number
+}
+
+export interface SimilarSeries {
+  series: SeriesCard
+  matchedTags: string[]
+}
+
+export interface OriginalNovel {
+  bookId?: string
+  title?: string
+  shortTitle?: string
+  coverUrl?: string
+  statusLabel?: string
+  reads?: number
+  showAtEpisode?: number
+  tags: string[]
 }
 
 export interface SeriesDetails {
   series: SeriesCard
   seasons: SeasonCard[]
   seasonWarning?: string
+  originalNovel?: OriginalNovel
 }
 
 export interface FilterRow {
@@ -150,6 +168,8 @@ export interface HongguoAPI {
   browse(query: BrowseQuery): Promise<Result<BrowsePage>>
   filters(genre: string): Promise<Result<FilterRow[]>>
   details(id: string): Promise<Result<SeriesDetails>>
+  similarSeries(id: string): Promise<Result<SimilarSeries[]>>
+  seasonHeat(id: string): Promise<Result<number | null>>
   follow(id: string): Promise<Result<Snapshot>>
   updateWatch(id: string, changes: { paused?: boolean; watchSeasons?: boolean }): Promise<Result<Snapshot>>
   removeWatch(id: string): Promise<Result<Snapshot>>

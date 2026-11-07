@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import type { Client, Series, SeriesSummary } from 'openhongguo'
-import type { BrowsePage, BrowseQuery, FilterRow, SeasonCard, SeriesCard, SeriesDetails } from '../shared/types'
+import type { BrowsePage, BrowseQuery, FilterRow, OriginalNovel, SeasonCard, SeriesCard, SeriesDetails, SimilarSeries } from '../shared/types'
+import { matchingFacets, similarMatches, themes } from './similarity'
 
 export class UserFacingError extends Error {}
 
@@ -65,8 +66,27 @@ function uniqueCards(rows: SeriesSummary[]): SeriesCard[] {
   return [...new Map(rows.filter((row) => row.id && row.title).map((row) => [row.id, card(row)])).values()]
 }
 
+function originalNovel(raw: Series): OriginalNovel | undefined {
+  const novel = raw.novel
+  const bookId = [novel?.book_id, raw.related_novel_book_id].find(id => id && /^[1-9]\d*$/.test(id))
+  const shortTitle = novel?.short_title?.trim()
+  const title = novel?.title?.trim() || shortTitle
+  const statusLabels: Record<number, string> = { 0: '已完结', 1: '连载中', 3: '今日更新' }
+  const result: OriginalNovel = {
+    bookId, title, shortTitle: shortTitle !== title ? shortTitle : undefined,
+    coverUrl: safeCover(novel?.cover_url),
+    statusLabel: novel ? statusLabels[novel.status] : undefined,
+    reads: typeof novel?.reads === 'number' && Number.isSafeInteger(novel.reads) && novel.reads >= 0 ? novel.reads : undefined,
+    showAtEpisode: typeof novel?.show_at_episode === 'number' && Number.isSafeInteger(novel.show_at_episode) && novel.show_at_episode > 0 ? novel.show_at_episode : undefined,
+    tags: [...new Set((novel?.tags ?? []).map(tag => tag.trim()).filter(Boolean))]
+  }
+  if (bookId || title || result.coverUrl || result.tags.length || result.statusLabel || result.reads !== undefined || result.showAtEpisode) return result
+  return undefined
+}
+
 export interface Inspection extends SeriesDetails {
   seasonListAvailable: boolean
+  genre?: string
 }
 
 /** The SDK can return a successful but incomplete album response. */
@@ -94,10 +114,11 @@ export function normalizeSeasonList(
 }
 
 export class Provider {
-  private clientPromise?: Promise<Client>
   private queue: Promise<unknown> = Promise.resolve()
+  private readonly heatCache = new Map<string, { value: number | null; checked: number }>()
+  private readonly opened = new Map<string, { details: SeriesDetails; genre: string }>()
 
-  constructor(private readonly dataPath: string) {}
+  constructor(private readonly dataPath: string, private clientPromise?: Promise<Client>) {}
 
   private client(): Promise<Client> {
     this.clientPromise ??= import('openhongguo').then(({ createClient }) => createClient({
@@ -180,25 +201,98 @@ export class Provider {
     const raw = await this.request((client) => client.getSeries(id))
     if (raw.id !== id) throw new UserFacingError('返回的作品编号不一致，已保留原有记录。')
     const series = card(raw)
-    const root: SeasonCard = { id, title: series.title, index: raw.season_index, episodeCount: series.episodeCount }
+    const heat = this.rememberHeat(raw)
+    const root: SeasonCard = { id, title: series.title, index: raw.season_index, episodeCount: series.episodeCount, heat: heat ?? undefined }
+    const genre = series.tags.some(tag => /AI漫剧|AI剧/i.test(tag)) ? 'ai_series'
+      : raw.content_type === 1004 || series.tags.some(tag => /漫剧|动态漫/.test(tag)) ? 'comic_series' : 'short_play'
     if (!includeSeasons) return { series, seasons: [root], seasonListAvailable: false }
+    const metadata = { series, genre, originalNovel: originalNovel(raw) }
     try {
       const album = await this.request((client) => client.seasons(id))
       const seasons = (album.seasons ?? []).map((season): SeasonCard => {
         validateId(season.series_id)
         return { id: season.series_id, title: season.title || `第 ${season.index ?? '?'} 季`, index: season.index, episodeCount: season.episode_count }
       })
-      return { series, ...normalizeSeasonList(seasons, root, album.season_count, Boolean(raw.is_multi_season || raw.related_album_id)) }
+      return { ...metadata, ...normalizeSeasonList(seasons, root, album.season_count, Boolean(raw.is_multi_season || raw.related_album_id)) }
     } catch (error) {
       const isSingle = !raw.is_multi_season && !raw.related_album_id
       const unavailable = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ALBUM_UNAVAILABLE'
-      return { series, seasons: [root], seasonListAvailable: isSingle && unavailable, seasonWarning: isSingle && unavailable ? undefined : toUserMessage(error) }
+      return { ...metadata, seasons: [root], seasonListAvailable: isSingle && unavailable, seasonWarning: isSingle && unavailable ? undefined : toUserMessage(error) }
     }
   }
 
   async details(id: string): Promise<SeriesDetails> {
     const result = await this.inspect(id)
-    return { series: result.series, seasons: result.seasons, seasonWarning: result.seasonWarning }
+    const details = { series: result.series, originalNovel: result.originalNovel, seasons: result.seasons.map(season => ({
+      ...season, heat: season.heat ?? this.cachedHeat(season.id) ?? undefined
+    })), seasonWarning: result.seasonWarning }
+    this.opened.delete(id)
+    this.opened.set(id, { details, genre: result.genre ?? 'short_play' })
+    if (this.opened.size > 16) this.opened.delete(this.opened.keys().next().value!)
+    return details
+  }
+
+  private rememberHeat(raw: Series): number | null {
+    const value = typeof raw.heat === 'number' && Number.isFinite(raw.heat) && raw.heat >= 0 ? raw.heat : null
+    return this.cacheHeat(raw.id, value)
+  }
+
+  private cacheHeat(id: string, value: number | null): number | null {
+    this.heatCache.delete(id)
+    this.heatCache.set(id, { value, checked: Date.now() })
+    if (this.heatCache.size > 256) this.heatCache.delete(this.heatCache.keys().next().value!)
+    return value
+  }
+
+  private cachedHeat(id: string): number | null | undefined {
+    const item = this.heatCache.get(id)
+    if (item && Date.now() - item.checked < 5 * 60_000) return item.value
+    return undefined
+  }
+
+  async seasonHeat(id: string): Promise<number | null> {
+    validateId(id)
+    const cached = this.cachedHeat(id)
+    if (cached !== undefined) return cached
+    let raw: Series
+    try { raw = await this.request(client => client.getSeries(id)) }
+    catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error &&
+          ['ANONYMOUS_LIMITED', 'CONTENT_UNAVAILABLE', 'AUTHENTICATION_REQUIRED'].includes(String(error.code))) return this.cacheHeat(id, null)
+      throw error
+    }
+    if (raw.id !== id) throw new UserFacingError('热度所属作品不一致。')
+    return this.rememberHeat(raw)
+  }
+
+  async similarSeries(id: string): Promise<SimilarSeries[]> {
+    validateId(id)
+    if (!this.opened.has(id)) await this.details(id)
+    const context = this.opened.get(id)!
+    const tags = themes(context.details.series.tags)
+    if (!tags.length) return []
+    const groups: { items: SeriesCard[]; tag?: string }[] = []
+    let filterError: unknown
+    try {
+      const rows = await this.filters(context.genre)
+      const pages = await Promise.allSettled(matchingFacets(tags, rows).map(async facet => {
+        const page = await this.browse({ mode: 'filter', genre: context.genre, selections: { [facet.key]: [facet.value] } })
+        return { items: page.items, tag: facet.tag }
+      }))
+      for (const page of pages) {
+        if (page.status === 'fulfilled') groups.push(page.value)
+        else filterError = page.reason
+      }
+    } catch (error) {
+      filterError = error
+    }
+    const matches = similarMatches(context.details, groups)
+    if (matches.length) return matches
+    // Anonymous recommendations are generic. Use only items with a matching subject.
+    const page = await this.request(client => client.seriesRecommend(id))
+    const fallback = similarMatches(context.details, [{ items: uniqueCards(page.items) }])
+    if (!fallback.length && filterError) throw filterError
+    return fallback
   }
 
   async episodeIds(id: string, allowEmpty: boolean): Promise<string[]> {

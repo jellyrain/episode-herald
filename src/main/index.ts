@@ -25,7 +25,7 @@ import { Store } from './store'
 import { createAppUpdates } from './app-updates'
 import { configureDataPaths, importInstalledData } from './data-paths'
 import { CoverCache } from './covers'
-import { toUserMessage } from './provider'
+import { Provider, toUserMessage } from './provider'
 
 const bundlePath = dirname(fileURLToPath(import.meta.url))
 protocol.registerSchemesAsPrivileged([{ scheme: 'hongguo-cover', privileges: { standard: true, secure: true } }])
@@ -206,7 +206,7 @@ function settings(value: unknown): Settings {
   }
 }
 
-function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdates>, push: QqPush): void {
+function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdates>, push: QqPush, provider: Provider): void {
   function handle<T>(name: string, action: (...args: unknown[]) => T | Promise<T>): void {
     ipcMain.handle('hongguo:' + name, async (event, ...args): Promise<Result<T>> => {
       if (!isTrusted(event)) return { ok: false, error: '当前页面无权执行此操作。' }
@@ -229,6 +229,8 @@ function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdat
   handle('browse', (query) => service.browse(browseQuery(query)))
   handle('filters', (value) => service.filters(genre(value)))
   handle('details', (id) => service.details(seriesId(id)))
+  handle('similar-series', id => provider.similarSeries(seriesId(id)))
+  handle('season-heat', id => provider.seasonHeat(seriesId(id)))
   handle('follow', (id) => service.follow(seriesId(id)))
   handle('update-watch', (id, value) => {
     const input = record(value)
@@ -292,11 +294,12 @@ if (!app.requestSingleInstanceLock()) {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hongguo:push-changed')
     })
     app.once('before-quit', () => push.stop())
-    monitor = new Monitor(dataPath, emitChanged, notify, undefined, store, () => { void push.dispatch() })
+    const provider = new Provider(dataPath)
+    monitor = new Monitor(dataPath, emitChanged, notify, provider, store, () => { void push.dispatch() })
     const updates = createAppUpdates(dataPath, portable, state => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hongguo:app-update', state)
     })
-    registerIpc(monitor, updates, push)
+    registerIpc(monitor, updates, push, provider)
     tray = new Tray(shellIcon)
     tray.setToolTip(productName)
     tray.setContextMenu(

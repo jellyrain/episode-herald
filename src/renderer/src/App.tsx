@@ -3,7 +3,7 @@ import { Button, IconButton, Spinner, Theme, Tooltip } from '@radix-ui/themes'
 import { Bell, CheckCheck, Compass, Library, Minus, Moon, RefreshCw, Send, Settings as SettingsIcon, Square, Sun, X } from 'lucide-react'
 import { productName } from '../../../package.json'
 import newsboy from './assets/newsboy.png'
-import type { Result, Snapshot } from '../../shared/types'
+import type { Result, SeasonCard, Snapshot } from '../../shared/types'
 import { dateTime, messageOf, unwrap } from './lib'
 import { EmptyState, ErrorBanner } from './components/Common'
 import { WatchList } from './components/WatchList'
@@ -30,7 +30,8 @@ export default function App(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [selected, setSelected] = useState<string | null>(null)
+  const [detailHistory, setDetailHistory] = useState<{ id: string; title?: string; seasons?: SeasonCard[] }[]>([])
+  const selected = detailHistory.at(-1)
   const mainRef = useRef<HTMLElement>(null)
   useEffect(() => { mainRef.current?.scrollTo(0, 0) }, [page])
   const navigate = (next: Page): void => {
@@ -38,13 +39,25 @@ export default function App(): React.JSX.Element {
     if (next === 'push') setPushOpened(true)
     setPage(next)
   }
-  const openSeries = (id: string): void => { setError(''); setSelected(id) }
-  const refresh = useCallback(async () => {
-    try {
-      if (!window.hongguo) throw new Error('桌面连接未建立，请通过应用启动。')
-      setSnapshot(unwrap(await window.hongguo.snapshot()))
+  const openSeries = (id: string): void => { setError(''); setDetailHistory([{ id }]) }
+  const openRelated = (id: string, previousTitle: string): void => {
+    setError('')
+    setDetailHistory(history => {
+      const previous = history.at(-1)
+      if (!previous) return [{ id }]
+      return [...history.slice(0, -1), { ...previous, title: previousTitle }, { id }]
+    })
+  }
+  const switchSeason = (id: string, seasons: SeasonCard[]): void => {
+    setError('')
+    setDetailHistory(history => [...history.slice(0, -1), { id, seasons }])
+  }
+  const refresh = useCallback((): Promise<void> => {
+    const pending = window.hongguo?.snapshot() ?? Promise.reject(new Error('桌面连接未建立，请通过应用启动。'))
+    return pending.then(unwrap).then(value => {
+      setSnapshot(value)
       setError('')
-    } catch (e) { setError(messageOf(e)) }
+    }).catch(e => setError(messageOf(e)))
   }, [])
 
   useEffect(() => {
@@ -173,7 +186,10 @@ export default function App(): React.JSX.Element {
         <span>{snapshot.lastCheckAt && '上次检查 ' + dateTime(snapshot.lastCheckAt)} {snapshot.lastCheckSummary}</span>
       </footer>}
       {notice && <div className={styles.toast} role="status"><CheckCheck size={17} />{notice}<button aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
-      {selected && <SeriesDialog id={selected} watch={snapshot?.watches.find(item => item.id === selected)} busy={checking} mutationError={error} onClose={() => setSelected(null)} onFollow={follow} onWatchSeasons={(id, watchSeasons) => void mutate(() => window.hongguo.updateWatch(id, { watchSeasons }))} />}
+      {selected && snapshot && <SeriesDialog key={selected.id} id={selected.id} knownSeasons={selected.seasons} watches={snapshot.watches} busy={checking} mutationError={error}
+        onClose={() => setDetailHistory([])} onRelated={openRelated} onSeason={switchSeason} previousTitle={detailHistory.at(-2)?.title}
+        onBack={detailHistory.length > 1 ? () => { setError(''); setDetailHistory(history => history.slice(0, -1)) } : undefined}
+        onFollow={follow} onWatchSeasons={(id, watchSeasons) => void mutate(() => window.hongguo.updateWatch(id, { watchSeasons }))} />}
     </div>
   </Theme>
 }
