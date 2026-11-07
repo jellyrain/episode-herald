@@ -147,3 +147,14 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Electron desktop workspace
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+.local-data/
+.test-build/
+test-results/

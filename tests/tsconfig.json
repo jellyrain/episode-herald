@@ -1,0 +1,14 @@
+{
+  "extends": "../node_modules/@electron-toolkit/tsconfig/tsconfig.node.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "rootDir": "..",
+    "outDir": "../.test-build",
+    "noEmit": false,
+    "composite": false,
+    "types": ["node"]
+  },
+  "include": ["./monitor.test.ts", "../src/main/monitor.ts", "../src/main/provider.ts", "../src/main/store.ts", "../src/shared/types.ts"]
+}
