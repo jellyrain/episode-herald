@@ -61,7 +61,8 @@ function CheckResult({ item, summary }: { item: WatchItem; summary: Summary }): 
       {highlight.kind === 'season' ? <Layers size={16} /> : <Bell size={16} />}
       <div>
         <strong>{highlight.kind === 'season' ? '发现新季 · ' + highlight.title : highlight.message.replace(/。$/, '')}</strong>
-        <small>{highlight.kind === 'episodes' && highlight.seriesId !== item.id && highlight.title + ' · '}
+        <small>{highlight.kind === 'season' && item.reservationSeasons?.some(s => s.id === highlight.seriesId) && '手机端可预约 · '}
+          {highlight.kind === 'episodes' && highlight.seriesId !== item.id && highlight.title + ' · '}
           {dateTime(highlight.createdAt)}{unread ? ' · ' + unread + ' 条未读' : ' · 已读'}
         </small>
       </div>

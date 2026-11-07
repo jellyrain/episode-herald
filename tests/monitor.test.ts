@@ -54,6 +54,7 @@ class FakeProvider implements MonitorProvider {
   readonly entries = new Map<string, { title: string; count?: number; seasons: SeasonCard[]; seasonCount?: number }>()
   readonly episodes = new Map<string, string[]>()
   readonly failures = new Map<string, Error>()
+  readonly detailFailures = new Map<string, Error>()
   readonly inspections: string[] = []
   beforeEpisodes?: () => Promise<void>
 
@@ -68,6 +69,8 @@ class FakeProvider implements MonitorProvider {
 
   async inspect(id: string, includeSeasons = true): Promise<Inspection> {
     this.inspections.push(id)
+    const failure = this.detailFailures.get(id)
+    if (failure) throw failure
     const entry = this.entries.get(id)
     assert.ok(entry, `Unexpected inspection of ${id}`)
     const root = { id, title: entry.title, episodeCount: entry.count }
@@ -348,6 +351,67 @@ test('an initial unknown-count season with an unavailable baseline does not repo
   await monitor.checkNow()
   assert.equal(monitor.snapshot().watches[0].baselineReady, true)
   assert.equal(monitor.snapshot().events.length, 0)
+})
+
+for (const endpoint of ['details', 'episodes'] as const) {
+  test(`a listed third season with restricted ${endpoint} is reservable, then its premiere is reported once`, async context => {
+    const { monitor, provider, notices } = fixture(context)
+    const limited = Object.assign(new Error('restricted'), { code: 'ANONYMOUS_LIMITED' })
+    provider.add(first, '第一季', [episode1])
+    provider.add(second, '第二季', [episode2])
+    provider.add(third, '第三季')
+    provider.entries.get(third)!.count = undefined
+    provider.entries.get(second)!.seasons = [
+      { id: first, title: '第一季', index: 1, episodeCount: 1 },
+      { id: second, title: '第二季', index: 2, episodeCount: 1 },
+      { id: third, title: '第三季', index: 3 }
+    ]
+    const failures = endpoint === 'details' ? provider.detailFailures : provider.failures
+    failures.set(third, limited)
+    await monitor.follow(second)
+    await monitor.checkNow()
+    const watch = () => monitor.snapshot().watches[0]
+    assert.equal(watch().lastError, undefined)
+    assert.equal(watch().baselineReady, true)
+    assert.deepEqual(watch().reservationSeasons, [{ id: third, index: 3 }])
+    assert.equal(watchSummary(watch(), []).result, '第 3 季可预约')
+    assert.equal(notices.length, 0)
+
+    // A genuine transport or permission failure must remain visible, even with a reservation.
+    failures.set(third, Object.assign(new Error(), { code: 'TRANSPORT' }))
+    await monitor.checkNow()
+    assert.match(watch().lastError!, /连接红果失败/)
+    failures.set(third, limited)
+    provider.failures.set(first, limited)
+    await monitor.checkNow()
+    assert.match(watch().lastError!, /第一季.*匿名查询/)
+    provider.failures.clear()
+    failures.delete(third)
+    provider.episodes.set(third, [episode3])
+    await monitor.checkNow()
+    await monitor.checkNow()
+    assert.deepEqual(watch().reservationSeasons, [])
+    assert.equal(watch().lastError, undefined)
+    assert.equal(watch().knownEpisodeCount, 3)
+    assert.equal((await monitor.details(second)).seasons.find(s => s.id === third)?.episodeCount, 1)
+    assert.deepEqual(monitor.snapshot().events.map(e => [e.seriesId, e.kind]), [[third, 'episodes']])
+    assert.equal(notices.length, 1)
+    failures.set(third, limited)
+    await monitor.checkNow()
+    assert.match(watch().lastError!, /第三季.*匿名查询/)
+    assert.deepEqual(watch().reservationSeasons, [])
+  })
+}
+
+test('a missing count and anonymous restriction on an unnumbered related work do not imply a reservation', async context => {
+  const { monitor, provider } = fixture(context)
+  provider.add(first, '已上线', [episode1])
+  provider.add(second, '尚无集数')
+  provider.entries.get(first)!.seasons = [{ id: second, title: '尚无集数' }]
+  provider.detailFailures.set(second, Object.assign(new Error(), { code: 'ANONYMOUS_LIMITED' }))
+  await monitor.follow(first)
+  assert.match(monitor.snapshot().watches[0].lastError!, /匿名查询/)
+  assert.deepEqual(monitor.snapshot().watches[0].reservationSeasons, [])
 })
 
 test('a new season seen first in a partial list is announced once when the list completes', async (context) => {

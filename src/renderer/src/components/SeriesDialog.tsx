@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Dialog, Spinner, Switch } from '@radix-ui/themes'
 import { Check, Layers, Plus } from 'lucide-react'
 import type { SeriesDetails, WatchItem } from '../../../shared/types'
+import { upcomingSeasonIds } from '../../../shared/watch-summary'
 import { Tags } from './PageControls'
 import { Cover, ErrorBanner } from './Common'
 import { messageOf, unwrap } from '../lib'
@@ -20,6 +21,7 @@ export function SeriesDialog({ id, watch, busy, mutationError, onClose, onFollow
     return () => { alive = false }
   }, [id, retry])
   const series = details?.series ?? watch?.series
+  const upcoming = details && !details.seasonWarning ? upcomingSeasonIds(details.seasons) : new Set<string>()
   return <Dialog.Root open onOpenChange={open => !open && onClose()}><Dialog.Content maxWidth="700px" className={styles.detailDialog}>
     <Dialog.Title>{series?.title ?? '作品详情'}</Dialog.Title><Dialog.Description size="2" color="gray">{series ? '作品编号 ' + series.id : '作品详情'}</Dialog.Description>
     {mutationError && <ErrorBanner>{mutationError}</ErrorBanner>}
@@ -33,7 +35,18 @@ export function SeriesDialog({ id, watch, busy, mutationError, onClose, onFollow
       </div>
     </div>}
     {details?.seasonWarning && <ErrorBanner>{details.seasonWarning}</ErrorBanner>}
-    {details && details.seasons.length > 0 && <section className={styles.seasons}><h3><Layers size={17} />关联季 <span>{details.seasons.length}</span></h3><div>{details.seasons.map(season => <div className={styles.seasonRow} key={season.id}><span>{season.index ? `第 ${season.index} 季` : '关联作品'}</span><strong>{season.title}</strong><small>{season.episodeCount ? `${season.episodeCount} 集` : '集数待公布'}</small></div>)}</div></section>}
+    {details && details.seasons.length > 0 && <section className={styles.seasons}>
+      <h3><Layers size={17} />关联季 <span>{details.seasons.length}</span></h3>
+      <div>{details.seasons.map(season => {
+        const waiting = !season.episodeCount && !season.published && watch?.reservationSeasons?.some(s => s.id === season.id)
+        const label = season.episodeCount ? `${season.episodeCount} 集` : waiting ? '手机端可预约'
+          : upcoming.has(season.id) ? '手机端查看预约' : '集数待公布'
+        return <div className={styles.seasonRow} key={season.id}>
+          <span>{season.index ? `第 ${season.index} 季` : '关联作品'}</span><strong>{season.title}</strong>
+          <small data-reservable={Boolean(waiting)}>{label}</small>
+        </div>
+      })}</div>
+    </section>}
     {watch && <div className={styles.settingRow}><div><strong id="watch-seasons-label">同时留意新季</strong><p>自动发现关联的新一季，并继续检查其新集。</p></div><Switch checked={watch.watchSeasons} onCheckedChange={value => onWatchSeasons(id, value)} disabled={busy} aria-labelledby="watch-seasons-label" /></div>}
     <div className={styles.dialogActions}><Dialog.Close><Button variant="soft" color="gray">关闭</Button></Dialog.Close><Button disabled={busy || Boolean(watch) || !series} onClick={() => void onFollow(id)}>{watch ? <><Check size={16} />已在追更清单</> : <><Plus size={16} />加入追更</>}</Button></div>
   </Dialog.Content></Dialog.Root>

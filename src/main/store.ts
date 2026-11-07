@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import type { SeasonCard, Settings, UpdateEvent, WatchItem } from '../shared/types'
 
 export interface SeasonState extends SeasonCard {
+  awaitingPremiere?: boolean
   episodeIds: string[]
   baselineReady: boolean
   /** Discovered after the initial complete season list, but not yet confirmed in a complete response. */

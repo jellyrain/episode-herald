@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { BrowsePage, BrowseQuery, FilterRow, SeriesDetails, Settings, Snapshot, UpdateEvent } from '../shared/types'
 import { Provider, toUserMessage, UserFacingError, validateId, type Inspection } from './provider'
 import { Store, type WatchRecord } from './store'
+import { upcomingSeasonIds } from '../shared/watch-summary'
 
 /** Last scheduled local time, including the previous day before today's scheduled hour. */
 export function latestDueTime(now: Date, time: string): Date {
@@ -51,7 +52,11 @@ export class Monitor {
 
   snapshot(): Snapshot {
     const settings = this.store.settings()
-    const watches = this.store.watches().map((record) => record.item)
+    const watches = this.store.watches().map(({ item, seasons }) => ({
+      ...item,
+      reservationSeasons: Object.values(seasons).filter(season => season.awaitingPremiere)
+        .map(({ id, index }) => ({ id, index }))
+    }))
     let nextCheckAt: string | undefined
     if (settings.autoCheck && watches.some((item) => !item.paused)) {
       const now = new Date()
@@ -74,8 +79,14 @@ export class Monitor {
     return this.provider.filters(genre)
   }
 
-  details(id: string): Promise<SeriesDetails> {
-    return this.provider.details(id)
+  async details(id: string): Promise<SeriesDetails> {
+    const details = await this.provider.details(id)
+    const tracked = this.store.watch(id)
+    if (!tracked) return details
+    return { ...details, seasons: details.seasons.map(season => {
+      const knownCount = tracked.seasons[season.id]?.episodeIds.length ?? 0
+      return knownCount > (season.episodeCount ?? 0) ? { ...season, episodeCount: knownCount } : season
+    }) }
   }
 
   private assertIdle(): void {
@@ -224,7 +235,8 @@ export class Monitor {
           const discoveredLater = record.item.watchSeasons && seasonBaselineReady && season.id !== record.item.id
           record.seasons[season.id] = { ...season, episodeIds: [], baselineReady: false, seasonNoticePending: discoveredLater, firstEpisodesPending: discoveredLater }
         } else {
-          record.seasons[season.id] = { ...previous, ...season, episodeCount: season.episodeCount ?? previous.episodeCount }
+          record.seasons[season.id] = { ...previous, ...season, index: season.index ?? previous.index,
+            published: previous.published || season.published, episodeCount: season.episodeCount ?? previous.episodeCount }
         }
       }
       const announcedThisCheck = new Set<string>()
@@ -241,36 +253,35 @@ export class Monitor {
         record.seasonBaselineReady = true
       }
       const seasons = Object.values(record.seasons).filter((season) => record.item.watchSeasons || season.id === record.item.id)
+      // SDK 0.2 does not expose the mobile reservation button. Require a listed
+      // later season after a known release as well as a pending endpoint response.
+      const candidates = inspection.seasonListAvailable ? upcomingSeasonIds(incoming,
+        id => Boolean(record.seasons[id]?.episodeIds.length || record.seasons[id]?.published)) : new Set<string>()
       for (const season of seasons) {
+        let expectedCount = season.episodeCount
+        if ((expectedCount ?? 0) > 0) season.published = true
+        const listedUpcoming = inspection.seasonListAvailable ? candidates.has(season.id) : Boolean(season.awaitingPremiere)
+        let canAwaitPremiere = season.id !== record.item.id && !season.episodeIds.length && !expectedCount &&
+          !season.published && listedUpcoming
+        if (!canAwaitPremiere) season.awaitingPremiere = false
         try {
-          let expectedCount = season.episodeCount
           if (season.id !== record.item.id) {
-            try {
-              const latest = await this.provider.inspect(season.id, false)
-              season.title = latest.series.title
-              expectedCount = latest.series.episodeCount ?? expectedCount
-            } catch (error) {
-              // A season may be announced before the detail/episode endpoints expose it.
-              if (!season.episodeIds.length && (expectedCount === 0 || (expectedCount === undefined && season.firstEpisodesPending)) && isUnavailable(error)) {
-                if (expectedCount === 0) season.baselineReady = true
-                continue
-              }
-              throw error
+            const latest = await this.provider.inspect(season.id, false)
+            season.title = latest.series.title
+            expectedCount = latest.series.episodeCount ?? expectedCount
+            if ((expectedCount ?? 0) > 0 || latest.series.status === 'completed' || latest.seasons.some(s => s.published)) {
+              canAwaitPremiere = false
+              season.awaitingPremiere = false
+              season.published = true
             }
           }
-          let ids: string[]
-          try {
-            ids = await this.provider.episodeIds(season.id, !season.episodeIds.length && (expectedCount === 0 || (expectedCount === undefined && Boolean(season.firstEpisodesPending))))
-          } catch (error) {
-            if (!season.episodeIds.length && (expectedCount === 0 || (expectedCount === undefined && season.firstEpisodesPending)) && isUnavailable(error)) {
-              if (expectedCount === 0) season.baselineReady = true
-              continue
-            }
-            throw error
-          }
+          const allowEmpty = canAwaitPremiere || (!season.episodeIds.length && (expectedCount === 0 ||
+            (expectedCount === undefined && Boolean(season.firstEpisodesPending))))
+          const ids = await this.provider.episodeIds(season.id, allowEmpty)
+          if (canAwaitPremiere && !ids.length) season.awaitingPremiere = true
           // An omitted count is unknown, not evidence of a zero-episode baseline.
           // Keep the first-publication marker until a nonempty complete response arrives.
-          if (!ids.length && expectedCount === undefined && season.firstEpisodesPending) continue
+          if (!ids.length && expectedCount === undefined && season.firstEpisodesPending && !season.awaitingPremiere) continue
           const added = compareEpisodes(season.episodeIds, ids, expectedCount)
           if ((season.baselineReady || season.firstEpisodesPending) && added.length && !season.seasonNoticePending && !announcedThisCheck.has(season.id)) {
             events.push({ id: eventId(record.item.id, 'episodes', season.id, added), watchId: record.item.id, seriesId: season.id, title: season.title, kind: 'episodes', message: `新增 ${added.length} 集，现有 ${ids.length} 集。`, createdAt: now, read: false })
@@ -278,12 +289,28 @@ export class Monitor {
           season.episodeIds = ids
           season.episodeCount = ids.length
           season.baselineReady = true
-          if (ids.length && !season.seasonNoticePending) season.firstEpisodesPending = false
+          if (ids.length) {
+            season.awaitingPremiere = false
+            if (!season.seasonNoticePending) season.firstEpisodesPending = false
+          }
           if (season.id === record.item.id) record.item.series.episodeCount = ids.length
           const announcement = events.find((event) => event.kind === 'season' && event.seriesId === season.id)
           if (announcement && ids.length) announcement.message = `发现关联新季，已列出 ${ids.length} 集。`
         } catch (error) {
-          errors.push(`${season.title}：${toUserMessage(error)}`)
+          const limited = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ANONYMOUS_LIMITED'
+          if (canAwaitPremiere && (limited || isUnavailable(error))) {
+            season.awaitingPremiere = true
+            season.baselineReady = true
+          } else if (!season.published && !season.episodeIds.length && isUnavailable(error) &&
+              (expectedCount === 0 || (expectedCount === undefined && season.firstEpisodesPending))) {
+            if (expectedCount === 0) season.baselineReady = true
+          } else {
+            errors.push(`${season.title}：${toUserMessage(error)}`)
+          }
+        }
+        if (season.awaitingPremiere && announcedThisCheck.has(season.id)) {
+          const announcement = events.find(event => event.kind === 'season' && event.seriesId === season.id)
+          if (announcement) announcement.message = '发现关联新季，红果手机端可预约，正在等待开播。'
         }
       }
       record.item.seasonCount = Object.keys(record.seasons).length

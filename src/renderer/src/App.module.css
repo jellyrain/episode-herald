@@ -263,6 +263,7 @@
 .seasonRow span { color: var(--accent); }
 .seasonRow strong { flex: 1; font-weight: 500; }
 .seasonRow small { color: var(--dim); }
+.seasonRow small[data-reservable="true"] { color: var(--accent); }
 .spin { animation: spin 1.4s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1000px) {
