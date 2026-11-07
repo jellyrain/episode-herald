@@ -1,10 +1,4 @@
-import type { SeasonCard, UpdateEvent, WatchItem } from './types'
-
-export function upcomingSeasonIds(seasons: SeasonCard[], previouslyPublished: (id: string) => boolean = () => false): Set<string> {
-  const released = seasons.filter(s => s.published || (s.episodeCount ?? 0) > 0 || previouslyPublished(s.id))
-  const lastPublished = Math.max(0, ...released.map(s => s.index ?? 0))
-  return new Set(lastPublished > 0 ? seasons.filter(s => (s.index ?? 0) > lastPublished).map(s => s.id) : [])
-}
+import type { UpdateEvent, WatchItem } from './types'
 
 export function watchSummary(watch: WatchItem, history: UpdateEvent[]) {
   // Store.events() is newest first. A re-follow starts a new baseline.

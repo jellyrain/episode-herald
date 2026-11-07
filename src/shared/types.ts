@@ -18,8 +18,6 @@ export interface SeasonCard {
   title: string
   index?: number
   episodeCount?: number
-  /** The catalogue explicitly labels this season as released (e.g. completed). */
-  published?: boolean
 }
 
 export interface SeriesDetails {

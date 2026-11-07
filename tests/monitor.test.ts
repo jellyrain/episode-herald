@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { Monitor, type MonitorProvider } from '../src/main/monitor'
+import { Store } from '../src/main/store'
 import { watchSummary } from '../src/shared/watch-summary'
 import { normalizeSeasonList, UserFacingError, type Inspection } from '../src/main/provider'
 import type { BrowsePage, FilterRow, SeasonCard, SeriesDetails } from '../src/shared/types'
@@ -393,7 +394,7 @@ for (const endpoint of ['details', 'episodes'] as const) {
     assert.deepEqual(watch().reservationSeasons, [])
     assert.equal(watch().lastError, undefined)
     assert.equal(watch().knownEpisodeCount, 3)
-    assert.equal((await monitor.details(second)).seasons.find(s => s.id === third)?.episodeCount, 1)
+    assert.equal((await monitor.details(second)).seasons.find(s => s.id === third)?.episodeCount, undefined)
     assert.deepEqual(monitor.snapshot().events.map(e => [e.seriesId, e.kind]), [[third, 'episodes']])
     assert.equal(notices.length, 1)
     failures.set(third, limited)
@@ -412,6 +413,52 @@ test('a missing count and anonymous restriction on an unnumbered related work do
   await monitor.follow(first)
   assert.match(monitor.snapshot().watches[0].lastError!, /匿名查询/)
   assert.deepEqual(monitor.snapshot().watches[0].reservationSeasons, [])
+})
+
+test('a v1.0.2 published flag without any episodes cannot hide a numbered reservation on recheck', async context => {
+  const { monitor, provider, dataPath } = fixture(context)
+  provider.add(first, '作品第五季', [episode1])
+  provider.add(second, '作品第六季')
+  provider.entries.get(first)!.seasons = [
+    { id: first, title: '作品第五季', index: 5, episodeCount: 1 },
+    { id: second, title: '作品第六季' }
+  ]
+  // A season detail may advertise a total before its album has any released episodes.
+  provider.entries.get(second)!.count = 80
+  provider.failures.set(second, Object.assign(new Error(), { code: 'ANONYMOUS_LIMITED' }))
+  await monitor.follow(first)
+
+  const store = new Store(dataPath)
+  const legacy = store.watch(first)!
+  const pending = legacy.seasons[second]
+  delete pending.index
+  Object.assign(pending, { published: true, episodeCount: undefined, episodeIds: [], baselineReady: false, awaitingPremiere: false })
+  Object.assign(legacy.item, { lastError: '作品第六季：匿名查询暂时受到限制，请稍后再试。', baselineReady: false })
+  store.saveWatch(legacy)
+  store.close()
+
+  await monitor.checkNow()
+  const watch = () => monitor.snapshot().watches[0]
+  assert.equal(watch().lastError, undefined)
+  assert.equal(watchSummary(watch(), []).result, '第 6 季可预约')
+  assert.equal(watch().knownEpisodeCount, 1)
+  assert.equal(monitor.snapshot().events.length, 0)
+  // The details view still uses the catalogue's original count and index.
+  const row = (await monitor.details(first)).seasons.find(s => s.id === second)!
+  assert.equal(row.index, undefined)
+  assert.equal(row.episodeCount, undefined)
+
+  provider.entries.get(first)!.seasons[1].episodeCount = 2
+  await monitor.checkNow()
+  assert.match(watch().lastError!, /匿名查询/)
+  assert.deepEqual(watch().reservationSeasons, [])
+  provider.failures.clear()
+  provider.entries.get(second)!.count = 2
+  provider.episodes.set(second, [episode2, episode3])
+  await monitor.checkNow()
+  await monitor.checkNow()
+  assert.equal(monitor.snapshot().events.length, 1)
+  assert.match(monitor.snapshot().events[0].message, /新增 2 集/)
 })
 
 test('a new season seen first in a partial list is announced once when the list completes', async (context) => {

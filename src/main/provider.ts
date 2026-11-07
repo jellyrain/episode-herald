@@ -78,8 +78,7 @@ export function normalizeSeasonList(
 ): Pick<Inspection, 'seasons' | 'seasonListAvailable' | 'seasonWarning'> {
   const byId = new Map(seasons.map(season => [season.id, season]))
   const albumRoot = byId.get(root.id)
-  byId.set(root.id, { ...root, index: root.index ?? albumRoot?.index, episodeCount: root.episodeCount ?? albumRoot?.episodeCount,
-    published: root.published || albumRoot?.published })
+  byId.set(root.id, { ...root, index: root.index ?? albumRoot?.index, episodeCount: root.episodeCount ?? albumRoot?.episodeCount })
   const unique = [...byId.values()]
   if (typeof expectedCount === 'number' && Number.isFinite(expectedCount) && expectedCount > unique.length) {
     return {
@@ -181,14 +180,13 @@ export class Provider {
     const raw = await this.request((client) => client.getSeries(id))
     if (raw.id !== id) throw new UserFacingError('返回的作品编号不一致，已保留原有记录。')
     const series = card(raw)
-    const root: SeasonCard = { id, title: series.title, index: raw.season_index, episodeCount: series.episodeCount, published: raw.status === 1 || raw.status === 3 }
+    const root: SeasonCard = { id, title: series.title, index: raw.season_index, episodeCount: series.episodeCount }
     if (!includeSeasons) return { series, seasons: [root], seasonListAvailable: false }
     try {
       const album = await this.request((client) => client.seasons(id))
       const seasons = (album.seasons ?? []).map((season): SeasonCard => {
         validateId(season.series_id)
-        return { id: season.series_id, title: season.title || `第 ${season.index ?? '?'} 季`, index: season.index, episodeCount: season.episode_count,
-          published: season.status === 1 || season.status === 3 }
+        return { id: season.series_id, title: season.title || `第 ${season.index ?? '?'} 季`, index: season.index, episodeCount: season.episode_count }
       })
       return { series, ...normalizeSeasonList(seasons, root, album.season_count, Boolean(raw.is_multi_season || raw.related_album_id)) }
     } catch (error) {

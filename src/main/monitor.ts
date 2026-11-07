@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { BrowsePage, BrowseQuery, FilterRow, SeriesDetails, Settings, Snapshot, UpdateEvent } from '../shared/types'
 import { Provider, toUserMessage, UserFacingError, validateId, type Inspection } from './provider'
-import { Store, type WatchRecord } from './store'
-import { upcomingSeasonIds } from '../shared/watch-summary'
+import { Store, type SeasonState, type WatchRecord } from './store'
 
 /** Last scheduled local time, including the previous day before today's scheduled hour. */
 export function latestDueTime(now: Date, time: string): Date {
@@ -29,6 +28,29 @@ function eventId(watchId: string, kind: UpdateEvent['kind'], seriesId: string, i
 
 function isUnavailable(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'CONTENT_UNAVAILABLE'
+}
+
+// Some album rows omit the index but retain an explicit season number in the title.
+function seasonIndexFromTitle(title: string): number | undefined {
+  const match = /第\s*(\d{1,3}|[一二三四五六七八九十]{1,3})\s*季(?=\s*(?:$|[:·(—-]))/u.exec(title.normalize('NFKC'))
+  if (!match) return undefined
+  const number = match[1]
+  if (/^\d+$/.test(number)) return Number(number) || undefined
+  const digits = '零一二三四五六七八九'
+  if (number.length === 1 && number !== '十') return digits.indexOf(number)
+  const tens = /^([一二三四五六七八九]?)十([一二三四五六七八九]?)$/.exec(number)
+  if (!tens) return undefined
+  return (tens[1] ? digits.indexOf(tens[1]) : 1) * 10 + (tens[2] ? digits.indexOf(tens[2]) : 0)
+}
+
+function hasPublishedEpisodes(season: SeasonState): boolean {
+  return season.episodeIds.length > 0 || (season.episodeCount ?? 0) > 0
+}
+
+function upcomingSeasonIds(seasons: SeasonState[]): Set<string> {
+  const released = seasons.filter(hasPublishedEpisodes)
+  const lastPublished = Math.max(0, ...released.map(s => s.index ?? 0))
+  return new Set(lastPublished > 0 ? seasons.filter(s => (s.index ?? 0) > lastPublished).map(s => s.id) : [])
 }
 
 export type MonitorProvider = Pick<Provider, 'browse' | 'filters' | 'details' | 'inspect' | 'episodeIds'>
@@ -79,14 +101,8 @@ export class Monitor {
     return this.provider.filters(genre)
   }
 
-  async details(id: string): Promise<SeriesDetails> {
-    const details = await this.provider.details(id)
-    const tracked = this.store.watch(id)
-    if (!tracked) return details
-    return { ...details, seasons: details.seasons.map(season => {
-      const knownCount = tracked.seasons[season.id]?.episodeIds.length ?? 0
-      return knownCount > (season.episodeCount ?? 0) ? { ...season, episodeCount: knownCount } : season
-    }) }
+  details(id: string): Promise<SeriesDetails> {
+    return this.provider.details(id)
   }
 
   private assertIdle(): void {
@@ -229,14 +245,15 @@ export class Monitor {
       const seasonBaselineReady = record.seasonBaselineReady
       const knownSeasons = new Set(Object.keys(record.seasons))
       const incoming = record.item.watchSeasons ? inspection.seasons : inspection.seasons.filter((season) => season.id === record.item.id)
+      const numberedAlbum = incoming.some(season => (season.index ?? 0) > 0)
       for (const season of incoming) {
         const previous = record.seasons[season.id]
+        const index = season.index || previous?.index || (numberedAlbum ? seasonIndexFromTitle(season.title) : undefined)
         if (!previous) {
           const discoveredLater = record.item.watchSeasons && seasonBaselineReady && season.id !== record.item.id
-          record.seasons[season.id] = { ...season, episodeIds: [], baselineReady: false, seasonNoticePending: discoveredLater, firstEpisodesPending: discoveredLater }
+          record.seasons[season.id] = { ...season, index, episodeIds: [], baselineReady: false, seasonNoticePending: discoveredLater, firstEpisodesPending: discoveredLater }
         } else {
-          record.seasons[season.id] = { ...previous, ...season, index: season.index ?? previous.index,
-            published: previous.published || season.published, episodeCount: season.episodeCount ?? previous.episodeCount }
+          record.seasons[season.id] = { ...previous, ...season, index, episodeCount: season.episodeCount ?? previous.episodeCount }
         }
       }
       const announcedThisCheck = new Set<string>()
@@ -255,25 +272,17 @@ export class Monitor {
       const seasons = Object.values(record.seasons).filter((season) => record.item.watchSeasons || season.id === record.item.id)
       // SDK 0.2 does not expose the mobile reservation button. Require a listed
       // later season after a known release as well as a pending endpoint response.
-      const candidates = inspection.seasonListAvailable ? upcomingSeasonIds(incoming,
-        id => Boolean(record.seasons[id]?.episodeIds.length || record.seasons[id]?.published)) : new Set<string>()
+      const candidates = inspection.seasonListAvailable ? upcomingSeasonIds(incoming.map(s => record.seasons[s.id])) : new Set<string>()
       for (const season of seasons) {
         let expectedCount = season.episodeCount
-        if ((expectedCount ?? 0) > 0) season.published = true
         const listedUpcoming = inspection.seasonListAvailable ? candidates.has(season.id) : Boolean(season.awaitingPremiere)
-        let canAwaitPremiere = season.id !== record.item.id && !season.episodeIds.length && !expectedCount &&
-          !season.published && listedUpcoming
+        const canAwaitPremiere = season.id !== record.item.id && !hasPublishedEpisodes(season) && listedUpcoming
         if (!canAwaitPremiere) season.awaitingPremiere = false
         try {
           if (season.id !== record.item.id) {
             const latest = await this.provider.inspect(season.id, false)
             season.title = latest.series.title
             expectedCount = latest.series.episodeCount ?? expectedCount
-            if ((expectedCount ?? 0) > 0 || latest.series.status === 'completed' || latest.seasons.some(s => s.published)) {
-              canAwaitPremiere = false
-              season.awaitingPremiere = false
-              season.published = true
-            }
           }
           const allowEmpty = canAwaitPremiere || (!season.episodeIds.length && (expectedCount === 0 ||
             (expectedCount === undefined && Boolean(season.firstEpisodesPending))))
@@ -282,7 +291,7 @@ export class Monitor {
           // An omitted count is unknown, not evidence of a zero-episode baseline.
           // Keep the first-publication marker until a nonempty complete response arrives.
           if (!ids.length && expectedCount === undefined && season.firstEpisodesPending && !season.awaitingPremiere) continue
-          const added = compareEpisodes(season.episodeIds, ids, expectedCount)
+          const added = compareEpisodes(season.episodeIds, ids, season.awaitingPremiere && !ids.length ? 0 : expectedCount)
           if ((season.baselineReady || season.firstEpisodesPending) && added.length && !season.seasonNoticePending && !announcedThisCheck.has(season.id)) {
             events.push({ id: eventId(record.item.id, 'episodes', season.id, added), watchId: record.item.id, seriesId: season.id, title: season.title, kind: 'episodes', message: `新增 ${added.length} 集，现有 ${ids.length} 集。`, createdAt: now, read: false })
           }
@@ -301,7 +310,7 @@ export class Monitor {
           if (canAwaitPremiere && (limited || isUnavailable(error))) {
             season.awaitingPremiere = true
             season.baselineReady = true
-          } else if (!season.published && !season.episodeIds.length && isUnavailable(error) &&
+          } else if (!hasPublishedEpisodes(season) && isUnavailable(error) &&
               (expectedCount === 0 || (expectedCount === undefined && season.firstEpisodesPending))) {
             if (expectedCount === 0) season.baselineReady = true
           } else {
