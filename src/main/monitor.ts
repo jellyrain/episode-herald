@@ -56,7 +56,6 @@ function upcomingSeasonIds(seasons: SeasonState[]): Set<string> {
 export type MonitorProvider = Pick<Provider, 'browse' | 'filters' | 'details' | 'inspect' | 'episodeIds'>
 
 export class Monitor {
-  private readonly store: Store
   private readonly provider: MonitorProvider
   private checking = false
   private timer?: ReturnType<typeof setInterval>
@@ -66,9 +65,10 @@ export class Monitor {
     readonly dataPath: string,
     private readonly onChanged: () => void,
     private readonly onNotify: (title: string, body: string) => void,
-    provider?: MonitorProvider
+    provider?: MonitorProvider,
+    private readonly store = new Store(dataPath),
+    private readonly onNewEvents?: () => void
   ) {
-    this.store = new Store(dataPath)
     this.provider = provider ?? new Provider(dataPath)
   }
 
@@ -331,12 +331,13 @@ export class Monitor {
     record.item.lastCheckedAt = now
     record.item.lastCheckWasBaseline = !previouslyReady && record.item.baselineReady && events.length === 0
     record.item.lastError = errors.length ? [...new Set(errors)].join(' ') : undefined
-    this.store.commitCheck(record, events)
-    if (events.length && this.store.settings().desktopNotifications) {
+    const added = this.store.commitCheck(record, events)
+    if (added.length) this.onNewEvents?.()
+    if (added.length && this.store.settings().desktopNotifications) {
       // The persistent event list is authoritative; a failed OS toast cannot roll it back.
-      try { this.onNotify(`${record.item.series.title} 有更新`, events.map((event) => `${event.title}：${event.message}`).join('\n').slice(0, 350)) } catch { /* Notification delivery can be disabled by Windows. */ }
+      try { this.onNotify(`${record.item.series.title} 有更新`, added.map((event) => `${event.title}：${event.message}`).join('\n').slice(0, 350)) } catch { /* Notification delivery can be disabled by Windows. */ }
     }
-    return { failed: errors.length > 0, events: events.length }
+    return { failed: errors.length > 0, events: added.length }
   }
 
   start(): void {

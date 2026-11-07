@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, IconButton, Spinner, Theme, Tooltip } from '@radix-ui/themes'
-import { Bell, CheckCheck, Compass, Library, Minus, Moon, RefreshCw, Settings as SettingsIcon, Square, Sun, X } from 'lucide-react'
+import { Bell, CheckCheck, Compass, Library, Minus, Moon, RefreshCw, Send, Settings as SettingsIcon, Square, Sun, X } from 'lucide-react'
 import { productName } from '../../../package.json'
 import newsboy from './assets/newsboy.png'
 import type { Result, Snapshot } from '../../shared/types'
@@ -10,20 +10,23 @@ import { WatchList } from './components/WatchList'
 import { PageHeader } from './components/PageControls'
 import { Discover } from './components/Discover'
 import { SettingsPage } from './components/SettingsPage'
+import { PushPage } from './components/PushPage'
 import { SeriesDialog } from './components/SeriesDialog'
 import styles from './App.module.css'
 
-type Page = 'watches' | 'discover' | 'updates' | 'settings'
+type Page = 'watches' | 'discover' | 'updates' | 'push' | 'settings'
 const pages = [
   { id: 'watches', label: '我的追更', icon: Library },
   { id: 'discover', label: '发现作品', icon: Compass },
-  { id: 'updates', label: '更新记录', icon: Bell }
+  { id: 'updates', label: '更新记录', icon: Bell },
+  { id: 'push', label: '推送', icon: Send }
 ] as const
 
 export default function App(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [page, setPage] = useState<Page>('watches')
   const [discoveryOpened, setDiscoveryOpened] = useState(false)
+  const [pushOpened, setPushOpened] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -32,6 +35,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => { mainRef.current?.scrollTo(0, 0) }, [page])
   const navigate = (next: Page): void => {
     if (next === 'discover') setDiscoveryOpened(true)
+    if (next === 'push') setPushOpened(true)
     setPage(next)
   }
   const openSeries = (id: string): void => { setError(''); setSelected(id) }
@@ -152,6 +156,8 @@ export default function App(): React.JSX.Element {
                   </div>
                 )}
               </>}
+              {pushOpened && <div hidden={page !== 'push'}><PushPage desktop={snapshot.settings.desktopNotifications} busy={busy}
+                setDesktop={value => void mutate(() => window.hongguo.saveSettings({ ...snapshot.settings, desktopNotifications: value }), '桌面通知设置已保存。')} /></div>}
               <div hidden={page !== 'settings'}><SettingsPage settings={snapshot.settings} dataPath={snapshot.dataPath} busy={busy} onSave={settings => mutate(() => window.hongguo.saveSettings(settings), '设置已保存。')} /></div>
             </>}
 

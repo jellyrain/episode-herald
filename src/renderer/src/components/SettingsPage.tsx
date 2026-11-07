@@ -88,12 +88,8 @@ export function SettingsPage({ settings, dataPath, busy, onSave }: { settings: S
         </div>
       </section>
       <section>
-        <h2>通知与窗口</h2>
+        <h2>窗口</h2>
         <div>
-          <SettingRow id="notify-label" label="桌面通知" hint="发现新季或新集时提醒，受系统勿扰设置影响。">
-            <Switch checked={draft.desktopNotifications} onCheckedChange={value => update('desktopNotifications', value)}
-              aria-labelledby="notify-label" disabled={busy} />
-          </SettingRow>
           <SettingRow id="tray-label" label="关闭到系统托盘" hint="收起窗口后继续检查，可从托盘菜单退出应用。">
             <Switch checked={draft.closeToTray} onCheckedChange={value => update('closeToTray', value)}
               aria-labelledby="tray-label" disabled={busy} />

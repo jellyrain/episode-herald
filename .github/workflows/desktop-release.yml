@@ -69,6 +69,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: windows-x64
@@ -78,5 +81,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/* --verify-tag --draft --title "追更小报 $GITHUB_REF_NAME" --notes "Windows x64 提供免安装 ZIP 和安装版 EXE。请选择 C 盘以外的可写目录。两种版本均将追更记录、封面、日志及更新缓存保存在程序旁的 data 文件夹，并使用各自的自动更新通道。"
+          gh release create "$GITHUB_REF_NAME" release/* --verify-tag --draft --title "追更小报 $GITHUB_REF_NAME" --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest

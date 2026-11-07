@@ -1,0 +1,22 @@
+.content { margin-top: 20px; }
+.panel, .history { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 18px 20px; }
+.channelHeader { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.content h2 { color: var(--text); font-size: 15px; margin: 0; }
+.content p, .field small { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+.fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px 24px; margin: 18px 0; padding: 18px 0; border-block: 1px solid var(--line); }
+.field { display: grid; align-content: start; gap: 7px; font-size: 13px; }
+.field .hint { margin: 0; }
+.secret, .actions { display: flex; align-items: center; gap: 10px; }
+.secret > :first-child { flex: 1; min-width: 0; }
+.actions { flex-wrap: wrap; }
+.panel .feedback { margin-top: 12px; color: var(--success); }
+.history { margin-top: 16px; }
+.history > p { padding: 10px 0 2px; }
+.delivery { display: flex; align-items: baseline; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.delivery:last-child { padding-bottom: 0; border-bottom: 0; }
+.delivery > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.message summary { cursor: pointer; font-weight: 600; }
+.message p { white-space: pre-line; padding: 4px 0; }
+.status { color: var(--muted); font-size: 12px; }
+.status[data-status='sent'] { color: var(--success); }
+.status[data-status='failed'], .status[data-status='unknown'] { color: var(--warning); }

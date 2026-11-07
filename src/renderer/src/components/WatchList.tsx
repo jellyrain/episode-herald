@@ -21,7 +21,7 @@ interface Props {
 }
 
 const filters = [
-  ['all', '全部'], ['updates', '有更新'], ['active', '追更中'], ['paused', '已暂停'], ['error', '需重试']
+  ['all', '全部'], ['updates', '有更新'], ['reservable', '可预约'], ['active', '追更中'], ['paused', '已暂停'], ['error', '需重试']
 ] as const
 type Filter = typeof filters[number][0]
 type Summary = ReturnType<typeof watchSummary>
@@ -29,6 +29,7 @@ type Summary = ReturnType<typeof watchSummary>
 function matchesFilter(item: WatchItem, summary: Summary, filter: Filter): boolean {
   switch (filter) {
     case 'updates': return summary.unread > 0
+    case 'reservable': return item.watchSeasons && Boolean(item.reservationSeasons?.length)
     case 'active': return !item.paused
     case 'paused': return item.paused
     case 'error': return Boolean(item.lastError)
@@ -113,12 +114,12 @@ export function WatchList({ snapshot, busy, onDiscover, onOpen, onCheck, onToggl
     </div>
 
     {visible.length === 0 ? <EmptyState
-      title={!rows.length ? '还没有追更作品' : filter === 'updates' && !query ? '没有未读更新' : '没有匹配的作品'}
+      title={!rows.length ? '还没有追更作品' : filter === 'reservable' && !query ? '暂无可预约作品' : filter === 'updates' && !query ? '没有未读更新' : '没有匹配的作品'}
       icon={<Library size={30} strokeWidth={1.5} />}
       action={<Button variant="soft" onClick={rows.length ? clearFilter : onDiscover}>
         {rows.length ? '查看全部作品' : '去发现作品'}
       </Button>}>
-      {!rows.length ? '加入作品后，首次检查会记录已有的季和集。' : filter === 'updates' && !query ? '新发现的季和分集会显示在这里。' : '可以调整上方筛选或搜索关键词。'}
+      {!rows.length ? '加入作品后，首次检查会记录已有的季和集。' : filter === 'reservable' && !query ? '检查到可预约的新季时，作品会出现在这里。' : filter === 'updates' && !query ? '新发现的季和分集会显示在这里。' : '可以调整上方筛选或搜索关键词。'}
     </EmptyState> : <div className={grid ? ui.grid : ui.list}>
       {visible.map(({ item, summary }) => <article key={item.id} className={ui.card} data-unread={summary.unread > 0}>
         <button className={ui.poster} onClick={() => onOpen(item.id)} aria-label={'查看' + item.series.title}>

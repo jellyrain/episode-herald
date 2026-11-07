@@ -7,6 +7,7 @@ import {
   Notification,
   powerMonitor,
   protocol,
+  safeStorage,
   Tray,
   type IpcMainEvent,
   type IpcMainInvokeEvent
@@ -19,6 +20,8 @@ import windowsIcon from '../../build/icon.ico?asset&asarUnpack'
 import { productName } from '../../package.json'
 import type { BrowseQuery, Result, Settings } from '../shared/types'
 import { Monitor } from './monitor'
+import { QqPush } from './qq-push'
+import { Store } from './store'
 import { createAppUpdates } from './app-updates'
 import { configureDataPaths, importInstalledData } from './data-paths'
 import { CoverCache } from './covers'
@@ -203,7 +206,7 @@ function settings(value: unknown): Settings {
   }
 }
 
-function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdates>): void {
+function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdates>, push: QqPush): void {
   function handle<T>(name: string, action: (...args: unknown[]) => T | Promise<T>): void {
     ipcMain.handle('hongguo:' + name, async (event, ...args): Promise<Result<T>> => {
       if (!isTrusted(event)) return { ok: false, error: '当前页面无权执行此操作。' }
@@ -215,6 +218,11 @@ function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdat
     })
   }
   handle('snapshot', () => service.snapshot())
+  handle('push-panel', () => push.panel())
+  handle('save-qq', value => push.save(value))
+  handle('check-qq', () => push.checkConnection())
+  handle('test-qq', () => push.test())
+  handle('retry-qq', id => push.retry(text(id)))
   handle('app-update-status', updates.status)
   handle('app-update-check', updates.check)
   handle('app-update-install', updates.install)
@@ -276,11 +284,19 @@ if (!app.requestSingleInstanceLock()) {
     if (app.isPackaged && !portable) importInstalledData(paths.oldAppData, dataPath)
     const covers = new CoverCache(dataPath)
     protocol.handle('hongguo-cover', request => covers.respond(request))
-    monitor = new Monitor(dataPath, emitChanged, notify)
+    const store = new Store(dataPath)
+    const push = new QqPush(store, {
+      encrypt: token => safeStorage.encryptString(token).toString('base64'),
+      decrypt: cipher => safeStorage.decryptString(Buffer.from(cipher, 'base64'))
+    }, () => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hongguo:push-changed')
+    })
+    app.once('before-quit', () => push.stop())
+    monitor = new Monitor(dataPath, emitChanged, notify, undefined, store, () => { void push.dispatch() })
     const updates = createAppUpdates(dataPath, portable, state => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hongguo:app-update', state)
     })
-    registerIpc(monitor, updates)
+    registerIpc(monitor, updates, push)
     tray = new Tray(shellIcon)
     tray.setToolTip(productName)
     tray.setContextMenu(
@@ -292,6 +308,7 @@ if (!app.requestSingleInstanceLock()) {
     )
     tray.on('double-click', showWindow)
     createWindow()
+    push.start()
     monitor.start()
     powerMonitor.on('resume', () => monitor?.resume())
   }).catch(() => {

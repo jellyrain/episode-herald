@@ -2,6 +2,16 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppUpdate, HongguoAPI } from '../shared/types'
 
 const api: HongguoAPI = {
+  pushPanel: () => ipcRenderer.invoke('hongguo:push-panel'),
+  saveQqPush: config => ipcRenderer.invoke('hongguo:save-qq', config),
+  checkQqConnection: () => ipcRenderer.invoke('hongguo:check-qq'),
+  testQqPush: () => ipcRenderer.invoke('hongguo:test-qq'),
+  retryQqPush: id => ipcRenderer.invoke('hongguo:retry-qq', id),
+  onPushChanged(listener) {
+    const handler = (): void => listener()
+    ipcRenderer.on('hongguo:push-changed', handler)
+    return () => ipcRenderer.off('hongguo:push-changed', handler)
+  },
   appUpdateStatus: () => ipcRenderer.invoke('hongguo:app-update-status'),
   checkAppUpdate: () => ipcRenderer.invoke('hongguo:app-update-check'),
   installAppUpdate: () => ipcRenderer.invoke('hongguo:app-update-install'),

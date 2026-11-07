@@ -91,6 +91,31 @@ export interface Settings {
   closeToTray: boolean
 }
 
+export interface QqPushConfig {
+  enabled: boolean
+  endpoint: string
+  targetType: 'private' | 'group'
+  targetId: string
+}
+export interface QqPushDraft extends QqPushConfig {
+  /** Omitted keeps the saved token; an empty string clears it. */
+  token?: string
+}
+export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | 'skipped'
+export interface PushDelivery {
+  id: string
+  title: string
+  body: string
+  recipient: string
+  createdAt: string
+  status: DeliveryStatus
+  detail: string
+}
+export interface PushPanel {
+  qq: QqPushConfig & { hasToken: boolean }
+  deliveries: PushDelivery[]
+}
+
 export interface Snapshot {
   watches: WatchItem[]
   events: UpdateEvent[]
@@ -111,6 +136,12 @@ export interface AppUpdate {
 }
 
 export interface HongguoAPI {
+  pushPanel(): Promise<Result<PushPanel>>
+  saveQqPush(config: QqPushDraft): Promise<Result<PushPanel>>
+  checkQqConnection(): Promise<Result<string>>
+  testQqPush(): Promise<Result<PushPanel>>
+  retryQqPush(id: string): Promise<Result<PushPanel>>
+  onPushChanged(listener: () => void): () => void
   appUpdateStatus(): Promise<Result<AppUpdate>>
   checkAppUpdate(): Promise<Result<AppUpdate>>
   installAppUpdate(): Promise<Result<void>>
