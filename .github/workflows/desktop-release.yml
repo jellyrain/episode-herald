@@ -33,7 +33,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - name: Package Windows x64
-        run: pnpm exec electron-builder --win nsis --x64 --publish never
+        run: node scripts/build-tool.cjs --win nsis --x64 --publish never
       - name: Create portable folder ZIP
         run: ./scripts/package-portable.ps1
       - name: Verify installer and update feed

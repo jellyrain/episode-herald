@@ -13,15 +13,15 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "tsc -p tests/tsconfig.json && node --test .test-build/tests/monitor.test.js",
+    "test": "tsc -p tests/tsconfig.json && node --test .test-build/tests/*.test.js",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
-    "postinstall": "install-electron && electron-builder install-app-deps",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win nsis --x64 --publish never && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1",
-    "build:mac": "electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "postinstall": "node scripts/build-tool.cjs setup",
+    "build:unpack": "npm run build && node scripts/build-tool.cjs --dir",
+    "build:win": "npm run build && node scripts/build-tool.cjs --win nsis --x64 --publish never && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1",
+    "build:mac": "electron-vite build && node scripts/build-tool.cjs --mac",
+    "build:linux": "electron-vite build && node scripts/build-tool.cjs --linux"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

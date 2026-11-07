@@ -39,4 +39,4 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-开发数据位于工程内的 `.local-data/`。在 Windows 上使用 `pnpm test` 运行离线测试，`pnpm build` 检查类型并编译，`pnpm run build:win` 在 `dist/` 生成安装包、免安装 ZIP 和更新清单。
+开发数据位于工程内的 `.local-data/`，Electron 和打包工具的下载缓存位于 `.build-cache/`。在 Windows 上使用 `pnpm test` 运行离线测试，`pnpm build` 检查类型并编译，`pnpm run build:win` 在 `dist/` 生成安装包、免安装 ZIP 和更新清单。

@@ -10,5 +10,5 @@
     "composite": false,
     "types": ["node"]
   },
-  "include": ["./monitor.test.ts", "../src/main/monitor.ts", "../src/main/provider.ts", "../src/main/store.ts", "../src/shared/types.ts"]
+  "include": ["./*.test.ts", "../src/main/monitor.ts", "../src/main/provider.ts", "../src/main/store.ts", "../src/shared/types.ts"]
 }

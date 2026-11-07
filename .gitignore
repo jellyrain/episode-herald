@@ -157,6 +157,7 @@ out
 *.log*
 .local-data/
 data/
+.build-cache/
 build/remove-program-files.nsh
 .test-build/
 test-results/
