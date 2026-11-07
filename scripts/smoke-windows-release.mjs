@@ -9,6 +9,9 @@ const pkg = JSON.parse(await readFile('package.json', 'utf8'))
 const port = 19371
 const directory = resolve(process.argv[2] || 'dist/win-unpacked')
 const portable = process.argv[3] === 'portable'
+for (const name of ['decode-cover.mjs', 'libheif.cjs']) {
+  await access(join(directory, 'resources', 'cover-decoder', name))
+}
 const child = spawn(join(directory, pkg.name + '.exe'), [
   '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port,
   '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'

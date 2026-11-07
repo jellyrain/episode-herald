@@ -6,7 +6,7 @@ import styles from '../App.module.css'
 export function Cover({ url, title, large = false }: { url?: string; title: string; large?: boolean }): React.JSX.Element {
   const [failed, setFailed] = useState('')
   const original = url ? coverSource(url) : ''
-  const source = url && failed === original ? coverSource(url, true) : original
+  const source = url && failed === original ? url : original
   const [fallbackFailed, setFallbackFailed] = useState('')
   const hasImage = source && failed !== source && fallbackFailed !== source
   return (

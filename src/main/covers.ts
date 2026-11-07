@@ -1,16 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { nativeImage, net } from 'electron'
+import { net } from 'electron'
 import { coverAddress } from '../shared/covers'
+import { decodeCover } from './decode-cover'
 
 const maxImageBytes = 4 * 1024 * 1024
 const maxCacheBytes = 48 * 1024 * 1024
+class CoverFailure extends Error {}
 
 function imageType(bytes: Buffer): string | undefined {
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
   if (bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return 'image/png'
   if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp'
+  if (['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6))) return 'image/gif'
+  if (bytes.toString('ascii', 4, 8) === 'ftyp' && ['avif', 'avis'].includes(bytes.toString('ascii', 8, 12))) return 'image/avif'
   return undefined
 }
 
@@ -29,7 +33,7 @@ async function downloadCover(source: URL): Promise<Buffer> {
   })
   if (!response.ok || !response.body || Number(response.headers.get('content-length')) > maxImageBytes) {
     await response.body?.cancel()
-    throw new Error('封面请求失败')
+    throw new CoverFailure(!response.ok ? `封面服务器返回 HTTP ${response.status}` : '封面为空或超过大小限制')
   }
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
@@ -40,7 +44,7 @@ async function downloadCover(source: URL): Promise<Buffer> {
     total += value.byteLength
     if (total > maxImageBytes) {
       await reader.cancel()
-      throw new Error('封面过大')
+      throw new CoverFailure('封面超过大小限制')
     }
     chunks.push(value)
   }
@@ -49,6 +53,8 @@ async function downloadCover(source: URL): Promise<Buffer> {
 
 export class CoverCache {
   private readonly directory: string
+  private readonly errorLog: string
+  private logging = false
   private readonly pending = new Map<string, Promise<Buffer>>()
   private readonly waiting: (() => void)[] = []
   private active = 0
@@ -56,6 +62,7 @@ export class CoverCache {
 
   constructor(dataPath: string) {
     this.directory = join(dataPath, 'covers')
+    this.errorLog = join(dataPath, 'logs', 'cover-error.log')
   }
 
   async respond(request: Request): Promise<Response> {
@@ -75,9 +82,21 @@ export class CoverCache {
       return new Response(new Uint8Array(bytes), {
         headers: { 'Content-Type': imageType(bytes)!, 'X-Content-Type-Options': 'nosniff' }
       })
-    } catch {
+    } catch (error) {
+      const reason = error instanceof CoverFailure ? error.message
+        : String(error).match(/(?:net::)?ERR_[A-Z_]+|TimeoutError/)?.[0] ?? '封面网络请求未完成'
+      await this.recordFailure(source, reason)
       return new Response(null, { status: 502 })
     }
+  }
+
+  private async recordFailure(source: URL, reason: string): Promise<void> {
+    if (this.logging) return
+    this.logging = true
+    try {
+      await writeFile(this.errorLog, `${new Date().toISOString()} ${source.hostname} ${reason}\n`)
+    } catch { /* Diagnostics are optional on read-only media. */ }
+    finally { this.logging = false }
   }
 
   private async load(key: string, source: URL): Promise<Buffer> {
@@ -85,31 +104,29 @@ export class CoverCache {
     try {
       const cached = await readFile(file)
       if (imageType(cached)) return cached
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
+    } catch { /* An unreadable cache entry can be fetched again. */ }
     if (this.active >= 3) await new Promise<void>(resolve => this.waiting.push(resolve))
     else this.active++
-    const temp = join(this.directory, randomUUID())
+    const temp = join(this.directory, randomUUID() + '.tmp')
     try {
-      await mkdir(this.directory, { recursive: true })
       let bytes = await downloadCover(source)
       if (!imageType(bytes)) {
-        if (bytes.toString('ascii', 4, 8) !== 'ftyp') throw new Error('封面格式无法识别')
-        await writeFile(temp + '.heic', bytes)
-        const thumbnail = await nativeImage.createThumbnailFromPath(temp + '.heic', { width: 400, height: 600 })
-        if (thumbnail.isEmpty()) throw new Error('系统无法解码封面')
-        bytes = thumbnail.toJPEG(87)
+        if (bytes.toString('ascii', 4, 8) !== 'ftyp') throw new CoverFailure('图片服务返回了无法识别的格式')
+        try { bytes = await decodeCover(bytes) }
+        catch { throw new CoverFailure('已收到图片，但内置解码器未能转换封面') }
       }
-      await writeFile(temp + '.tmp', bytes)
-      await rename(temp + '.tmp', file)
-      if (this.writes++ % 24 === 0) void this.prune().catch(() => undefined)
+      try {
+        await mkdir(this.directory, { recursive: true })
+        await writeFile(temp, bytes)
+        await rename(temp, file)
+        if (this.writes++ % 24 === 0) void this.prune().catch(() => undefined)
+      } catch { await this.recordFailure(source, '图片已显示，但写入本地封面缓存失败') }
       return bytes
     } finally {
       const next = this.waiting.shift()
       if (next) next()
       else this.active--
-      await Promise.all([temp + '.heic', temp + '.tmp'].map(path => unlink(path).catch(() => undefined)))
+      await unlink(temp).catch(() => undefined)
     }
   }
 

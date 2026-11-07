@@ -3,3 +3,7 @@ Episode Herald (追更小报)
 The portable update helper in resources/updater/portable-install.ps1 is adapted
 from Wanxiang Workshop (万象工坊), Copyright 2026 jellyrain, licensed under
 the Apache License, Version 2.0. See resources/licenses/Apache-2.0.txt.
+
+HEIC covers are decoded by the unmodified libheif-js 1.23.5 WebAssembly bundle.
+The decoder and its license notices are distributed in resources/cover-decoder.
+Source and build instructions: https://github.com/catdad-experiments/libheif-js

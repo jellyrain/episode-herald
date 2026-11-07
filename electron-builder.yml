@@ -6,6 +6,15 @@ publish:
   url: https://github.com/jellyrain/episode-herald/releases/latest/download/
 directories:
   buildResources: build
+extraResources:
+  - from: scripts/decode-cover.mjs
+    to: cover-decoder/decode-cover.mjs
+  - from: node_modules/libheif-js/libheif-wasm/libheif-bundle.js
+    to: cover-decoder/libheif.cjs
+  - from: node_modules/libheif-js/LICENSE
+    to: cover-decoder/LICENSE-libheif-js
+  - from: node_modules/libheif-js/libheif-wasm/LICENSE
+    to: cover-decoder/LICENSE-libheif
 files:
   - out/**/*
   - resources/**/*

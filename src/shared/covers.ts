@@ -9,8 +9,7 @@ export function coverAddress(value: string): URL | undefined {
   return undefined
 }
 
-export function coverSource(value: string, afterDecodeError = false): string {
-  const url = coverAddress(value)
-  if (!url || (!afterDecodeError && !/\.hei[cf]$/i.test(url.pathname))) return value
+export function coverSource(value: string): string {
+  if (!coverAddress(value)) return value
   return 'hongguo-cover://poster/?' + new URLSearchParams({ src: value }).toString()
 }
