@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppUpdate, HongguoAPI } from '../shared/types'
 
 const api: HongguoAPI = {
+  exportBackup: (password, view) => ipcRenderer.invoke('hongguo:export-backup', password, view),
+  importBackup: password => ipcRenderer.invoke('hongguo:import-backup', password),
   cacheUsage: () => ipcRenderer.invoke('hongguo:cache-usage'),
   clearCache: () => ipcRenderer.invoke('hongguo:cache-clear'),
   pushPanel: () => ipcRenderer.invoke('hongguo:push-panel'),
@@ -24,6 +26,7 @@ const api: HongguoAPI = {
   },
   snapshot: () => ipcRenderer.invoke('hongguo:snapshot'),
   browse: (query) => ipcRenderer.invoke('hongguo:browse', query),
+  searchCovers: ids => ipcRenderer.invoke('hongguo:search-covers', ids),
   filters: (genre) => ipcRenderer.invoke('hongguo:filters', genre),
   details: (id) => ipcRenderer.invoke('hongguo:details', id),
   similarSeries: id => ipcRenderer.invoke('hongguo:similar-series', id),

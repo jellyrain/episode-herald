@@ -3,9 +3,31 @@ import type { PushPanel, QqPushConfig } from '../shared/types'
 import { UserFacingError } from './provider'
 import { qqRoute, type SavedQqConfig, type Store } from './store'
 
-interface TokenStorage {
+export interface TokenStorage {
   encrypt(token: string): string
   decrypt(cipher: string): string
+}
+
+export function normalizeQq(input: unknown): QqPushConfig & { token?: string } {
+  const value = input as Record<string, unknown> | null
+  if (!value || typeof value.enabled !== 'boolean' || typeof value.endpoint !== 'string' ||
+      !['private', 'group'].includes(String(value.targetType)) || typeof value.targetId !== 'string' ||
+      (value.token !== undefined && (typeof value.token !== 'string' || !/^[\x21-\x7e]{0,2048}$/.test(value.token)))) {
+    throw new UserFacingError('请检查 QQ 推送配置，Token 不能包含空格或换行。')
+  }
+  let endpoint = value.endpoint.trim()
+  if (endpoint || value.enabled) {
+    try {
+      const url = new URL(endpoint)
+      if (endpoint.length > 2048 || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw Error()
+      endpoint = url.href.replace(/\/+$/, '')
+    } catch { throw new UserFacingError('请填写 OneBot HTTP 服务地址，例如 http://127.0.0.1:3000。') }
+  }
+  const targetId = value.targetId.trim()
+  if ((targetId || value.enabled) && (!/^[1-9]\d{0,15}$/.test(targetId) || !Number.isSafeInteger(Number(targetId)))) {
+    throw new UserFacingError('请填写有效的 QQ 号或群号。')
+  }
+  return { enabled: value.enabled, endpoint, targetType: value.targetType as QqPushConfig['targetType'], targetId, token: value.token as string | undefined }
 }
 
 class Unconfirmed extends UserFacingError {}
@@ -16,6 +38,8 @@ export class QqPush {
 
   constructor(private readonly store: Store, private readonly tokens: TokenStorage,
     private readonly changed: () => void, private readonly request: typeof fetch = fetch) {}
+
+  get sending(): boolean { return this.running }
 
   start(): void {
     this.store.recoverDeliveries()
@@ -30,24 +54,8 @@ export class QqPush {
   }
 
   save(input: unknown): PushPanel {
-    const value = input as Record<string, unknown> | null
-    if (!value || typeof value.enabled !== 'boolean' || typeof value.endpoint !== 'string' ||
-        !['private', 'group'].includes(String(value.targetType)) || typeof value.targetId !== 'string' ||
-        (value.token !== undefined && (typeof value.token !== 'string' || !/^[\x21-\x7e]{0,2048}$/.test(value.token)))) {
-      throw new UserFacingError('请检查 QQ 推送配置，Token 不能包含空格或换行。')
-    }
-    let endpoint = value.endpoint.trim()
-    if (endpoint || value.enabled) {
-      try {
-        const url = new URL(endpoint)
-        if (endpoint.length > 2048 || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw Error()
-        endpoint = url.href.replace(/\/+$/, '')
-      } catch { throw new UserFacingError('请填写 OneBot HTTP 服务地址，例如 http://127.0.0.1:3000。') }
-    }
-    const targetId = value.targetId.trim()
-    if ((targetId || value.enabled) && (!/^[1-9]\d{0,15}$/.test(targetId) || !Number.isSafeInteger(Number(targetId)))) {
-      throw new UserFacingError('请填写有效的 QQ 号或群号。')
-    }
+    const value = normalizeQq(input)
+    const { endpoint, targetId } = value
     const old = this.store.qqConfig()
     if (old.cipher && endpoint !== old.endpoint && value.token === undefined) {
       throw new UserFacingError('更换服务地址时，请重新填写 Token 或清除已保存的 Token。')

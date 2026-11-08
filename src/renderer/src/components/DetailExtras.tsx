@@ -75,7 +75,7 @@ export function SeasonRows({ seasons, currentId, onSelect }: {
       const current = season.id === currentId
       return <div className={styles.seasonRow} key={season.id}>
         <button className={styles.seasonSelect} type="button" aria-current={current || undefined} disabled={current} onClick={() => onSelect(season.id)}>
-          <span>{season.index ? `第 ${season.index} 季` : '关联作品'}</span><strong>{season.title}</strong>
+          <span>{season.index ? `第 ${season.index} 季` : '季号待定'}</span><strong>{season.title}</strong>
           {showHeat && (typeof heat === 'number' ? <small className={styles.heat} title={`红果热度 ${heat.toLocaleString('zh-CN')}`} aria-label={`热度 ${heat}`}>
           <Flame size={14} aria-hidden="true" />{compactHeat.format(heat)}
         </small> : heat === 'error' ? null

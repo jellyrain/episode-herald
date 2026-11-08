@@ -2,6 +2,8 @@ import { join } from 'node:path'
 import type { Client, Series, SeriesSummary } from 'openhongguo'
 import type { BrowsePage, BrowseQuery, FilterRow, OriginalNovel, SeasonCard, SeriesCard, SeriesDetails, SimilarSeries } from '../shared/types'
 import { matchingFacets, similarMatches, themes } from './similarity'
+import { coverAddress } from '../shared/covers'
+import { orderedSeasons } from '../shared/seasons'
 
 export class UserFacingError extends Error {}
 
@@ -39,7 +41,11 @@ function text(value: unknown, maxLength = 200): value is string {
 function safeCover(url: unknown): string | undefined {
   if (typeof url !== 'string') return undefined
   try {
-    const parsed = new URL(url)
+    const parsed = new URL(url.startsWith('//') ? 'https:' + url : url)
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:'
+      return coverAddress(parsed.href)?.href
+    }
     return parsed.protocol === 'https:' && !parsed.username && !parsed.password ? parsed.href : undefined
   } catch {
     return undefined
@@ -86,6 +92,7 @@ function originalNovel(raw: Series): OriginalNovel | undefined {
 
 export interface Inspection extends SeriesDetails {
   seasonListAvailable: boolean
+  isMultiSeason?: boolean
   genre?: string
 }
 
@@ -95,11 +102,12 @@ export function normalizeSeasonList(
   root: SeasonCard,
   expectedCount?: number,
   isMultiSeason = false
-): Pick<Inspection, 'seasons' | 'seasonListAvailable' | 'seasonWarning'> {
+): Pick<Inspection, 'seasons' | 'seasonListAvailable' | 'seasonWarning' | 'directoryComplete'> {
   const byId = new Map(seasons.map(season => [season.id, season]))
   const albumRoot = byId.get(root.id)
-  byId.set(root.id, { ...root, index: root.index ?? albumRoot?.index, episodeCount: root.episodeCount ?? albumRoot?.episodeCount })
-  const unique = [...byId.values()]
+  const directoryComplete = Boolean(albumRoot) && byId.size === expectedCount
+  byId.set(root.id, { ...root, index: albumRoot?.index && albumRoot.index > 0 ? albumRoot.index : root.index, episodeCount: root.episodeCount ?? albumRoot?.episodeCount })
+  const unique = orderedSeasons([...byId.values()])
   if (typeof expectedCount === 'number' && Number.isFinite(expectedCount) && expectedCount > unique.length) {
     return {
       seasons: unique,
@@ -110,7 +118,7 @@ export function normalizeSeasonList(
   if (!seasons.length && isMultiSeason) {
     return { seasons: unique, seasonListAvailable: false, seasonWarning: '关联季列表暂时为空，已保留已有各季。' }
   }
-  return { seasons: unique, seasonListAvailable: true }
+  return { seasons: unique, seasonListAvailable: true, directoryComplete }
 }
 
 export class Provider {
@@ -196,6 +204,32 @@ export class Provider {
     })))
   }
 
+  async searchCovers(ids: string[]): Promise<Record<string, string>> {
+    if (!Array.isArray(ids) || ids.length > 10) throw new UserFacingError('封面查询数量无效。')
+    ids.forEach(validateId)
+    const requested = new Set(ids)
+    const covers: Record<string, string> = {}
+    if (!requested.size) return covers
+    const rows = await this.request(client => client.getSeriesBatch([...requested]))
+    for (const { series } of rows) {
+      const url = safeCover(series?.cover_url)
+      if (url && requested.has(series.id)) covers[series.id] = url
+    }
+    return covers
+  }
+
+  async seasonDirectory(id: string): Promise<{ seasons: SeasonCard[]; expectedCount?: number; coverUrl?: string }> {
+    validateId(id)
+    const album = await this.request(client => client.seasons(id))
+    const rows = album.seasons ?? []
+    const seasons = rows.map((row): SeasonCard => {
+      validateId(row.series_id)
+      return { id: row.series_id, title: row.title || (row.index && row.index > 0 ? `第 ${row.index} 季` : '未命名作品'), index: row.index,
+        episodeCount: typeof row.episode_count === 'number' && Number.isSafeInteger(row.episode_count) && row.episode_count >= 0 ? row.episode_count : undefined }
+    })
+    return { seasons, expectedCount: album.season_count, coverUrl: safeCover(rows.find(row => row.series_id === id)?.cover_url) }
+  }
+
   async inspect(id: string, includeSeasons = true): Promise<Inspection> {
     validateId(id)
     const raw = await this.request((client) => client.getSeries(id))
@@ -205,19 +239,16 @@ export class Provider {
     const root: SeasonCard = { id, title: series.title, index: raw.season_index, episodeCount: series.episodeCount, heat: heat ?? undefined }
     const genre = series.tags.some(tag => /AI漫剧|AI剧/i.test(tag)) ? 'ai_series'
       : raw.content_type === 1004 || series.tags.some(tag => /漫剧|动态漫/.test(tag)) ? 'comic_series' : 'short_play'
-    if (!includeSeasons) return { series, seasons: [root], seasonListAvailable: false }
+    const isMultiSeason = Boolean(raw.is_multi_season || raw.related_album_id)
+    if (!includeSeasons) return { series, seasons: [root], seasonListAvailable: false, isMultiSeason }
     const metadata = { series, genre, originalNovel: originalNovel(raw) }
     try {
-      const album = await this.request((client) => client.seasons(id))
-      const seasons = (album.seasons ?? []).map((season): SeasonCard => {
-        validateId(season.series_id)
-        return { id: season.series_id, title: season.title || `第 ${season.index ?? '?'} 季`, index: season.index, episodeCount: season.episode_count }
-      })
-      return { ...metadata, ...normalizeSeasonList(seasons, root, album.season_count, Boolean(raw.is_multi_season || raw.related_album_id)) }
+      const { seasons, expectedCount } = await this.seasonDirectory(id)
+      return { ...metadata, ...normalizeSeasonList(seasons, root, expectedCount, isMultiSeason) }
     } catch (error) {
       const isSingle = !raw.is_multi_season && !raw.related_album_id
       const unavailable = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ALBUM_UNAVAILABLE'
-      return { ...metadata, seasons: [root], seasonListAvailable: isSingle && unavailable, seasonWarning: isSingle && unavailable ? undefined : toUserMessage(error) }
+      return { ...metadata, seasons: orderedSeasons([root]), seasonListAvailable: isSingle && unavailable, seasonWarning: isSingle && unavailable ? undefined : toUserMessage(error) }
     }
   }
 
@@ -225,7 +256,7 @@ export class Provider {
     const result = await this.inspect(id)
     const details = { series: result.series, originalNovel: result.originalNovel, seasons: result.seasons.map(season => ({
       ...season, heat: season.heat ?? this.cachedHeat(season.id) ?? undefined
-    })), seasonWarning: result.seasonWarning }
+    })), seasonWarning: result.seasonWarning, directoryComplete: result.directoryComplete }
     this.opened.delete(id)
     this.opened.set(id, { details, genre: result.genre ?? 'short_play' })
     if (this.opened.size > 16) this.opened.delete(this.opened.keys().next().value!)

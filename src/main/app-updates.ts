@@ -84,7 +84,12 @@ export function createAppUpdates(dataPath: string, portable: boolean, changed: (
     check,
     async install(): Promise<void> {
       if (state.phase !== 'ready') throw new Error('没有可安装的应用更新。')
-      if (updater) { updater.quitAndInstall(false, true); return }
+      // The assisted NSIS installer relaunches after an update with /S and --force-run.
+      if (updater) {
+        publish({ phase: 'installing', version: state.version })
+        updater.quitAndInstall(true, true)
+        return
+      }
       if (!downloaded) throw new Error('请先下载免安装更新。')
       publish({ phase: 'installing', version: downloaded.info.version })
       try { await installPortable(downloaded.info, downloaded.archive, cache) }

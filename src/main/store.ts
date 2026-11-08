@@ -9,6 +9,8 @@ export const qqRoute = (config: QqPushConfig): string => JSON.stringify([config.
 
 export interface SeasonState extends SeasonCard {
   awaitingPremiere?: boolean
+  /** Keep an absent reservation for reconciliation when the catalogue supplies a season number. */
+  missingFromDirectory?: boolean
   episodeIds: string[]
   baselineReady: boolean
   /** Discovered after the initial complete season list, but not yet confirmed in a complete response. */
@@ -26,6 +28,14 @@ export interface WatchRecord {
 export interface CheckState {
   lastCheckAt?: string
   lastCheckSummary?: string
+}
+
+export interface BackupRecords {
+  watches: WatchRecord[]
+  events: UpdateEvent[]
+  settings: Settings
+  checkState: CheckState
+  deliveries: (PushDelivery & { route: string })[]
 }
 
 export const defaultSettings: Settings = {
@@ -183,6 +193,33 @@ export class Store {
       const update = this.db.prepare('UPDATE events SET payload = ? WHERE id = ?')
       for (const event of this.events()) {
         if (!event.read) update.run(JSON.stringify({ ...event, read: true }), event.id)
+      }
+    })
+  }
+
+  backupRecords(): BackupRecords {
+    return {
+      watches: this.watches(), events: this.events(), settings: this.settings(), checkState: this.checkState(),
+      deliveries: this.db.prepare('SELECT * FROM qq_deliveries ORDER BY rowid').all() as unknown as BackupRecords['deliveries']
+    }
+  }
+
+  restoreRecords(data: BackupRecords, qq: SavedQqConfig): void {
+    this.transaction(() => {
+      this.db.exec('DELETE FROM watches; DELETE FROM events; DELETE FROM qq_deliveries;')
+      for (const record of data.watches) this.saveWatch(record)
+      const event = this.db.prepare('INSERT INTO events (id,created_at,payload) VALUES (?,?,?)')
+      for (const row of [...data.events].reverse()) event.run(row.id, row.createdAt, JSON.stringify(row))
+      this.saveSettings(data.settings)
+      this.saveCheckState(data.checkState)
+      this.setPreference('qqPush', qq)
+      const delivery = this.db.prepare('INSERT INTO qq_deliveries (id,route,title,body,recipient,createdAt,status,detail) VALUES (?,?,?,?,?,?,?,?)')
+      for (const row of data.deliveries) {
+        const uncertain = row.status === 'sending'
+        const pending = row.status === 'pending'
+        delivery.run(row.id, row.route, row.title, row.body, row.recipient, row.createdAt,
+          uncertain ? 'unknown' : pending ? 'skipped' : row.status,
+          uncertain ? '备份时正在发送，请核实 QQ 回执。' : pending ? '从备份恢复，已跳过历史待发送消息。' : row.detail)
       }
     })
   }

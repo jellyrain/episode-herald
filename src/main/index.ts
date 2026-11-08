@@ -20,12 +20,13 @@ import windowsIcon from '../../build/icon.ico?asset&asarUnpack'
 import { productName } from '../../package.json'
 import type { BrowseQuery, Result, Settings } from '../shared/types'
 import { Monitor } from './monitor'
-import { QqPush } from './qq-push'
+import { QqPush, type TokenStorage } from './qq-push'
+import { exportBackup, readBackup, restoreBackup } from './backup'
 import { Store } from './store'
 import { createAppUpdates } from './app-updates'
 import { configureDataPaths, importInstalledData } from './data-paths'
 import { CoverCache } from './covers'
-import { Provider, toUserMessage } from './provider'
+import { Provider, toUserMessage, UserFacingError } from './provider'
 
 const bundlePath = dirname(fileURLToPath(import.meta.url))
 protocol.registerSchemesAsPrivileged([{ scheme: 'hongguo-cover', privileges: { standard: true, secure: true } }])
@@ -47,10 +48,13 @@ let quitting = false
 const notifications = new Set<Notification>()
 
 function showWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) createWindow()
-  if (mainWindow?.isMinimized()) mainWindow.restore()
-  mainWindow?.show()
-  mainWindow?.focus()
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
 }
 
 function emitChanged(): void {
@@ -89,7 +93,7 @@ function createWindow(): void {
     }
   })
   const window = mainWindow
-  window.once('ready-to-show', () => window.show())
+  window.once('ready-to-show', showWindow)
   window.on('close', (event) => {
     if (!quitting && tray && monitor?.snapshot().settings.closeToTray) {
       event.preventDefault()
@@ -206,7 +210,7 @@ function settings(value: unknown): Settings {
   }
 }
 
-function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdates>, push: QqPush, provider: Provider): void {
+function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdates>, push: QqPush, provider: Provider, store: Store, tokens: TokenStorage): void {
   function handle<T>(name: string, action: (...args: unknown[]) => T | Promise<T>): void {
     ipcMain.handle('hongguo:' + name, async (event, ...args): Promise<Result<T>> => {
       if (!isTrusted(event)) return { ok: false, error: '当前页面无权执行此操作。' }
@@ -218,6 +222,48 @@ function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdat
     })
   }
   handle('snapshot', () => service.snapshot())
+  let transferring = false
+  async function transfer<T>(action: () => Promise<T>): Promise<T> {
+    if (transferring) throw new UserFacingError('另一项导入或导出正在进行。')
+    transferring = true
+    try { return await action() }
+    catch (error) {
+      if (error instanceof UserFacingError) throw error
+      throw new UserFacingError('无法完成备份文件操作，请检查文件权限和可用空间。')
+    } finally { transferring = false }
+  }
+  const filters = [{ name: '追更小报加密备份', extensions: ['ehbackup'] }]
+  handle('export-backup', (password, view) => transfer(async () => {
+    const secret = text(password, 1024)
+    if (view !== 'grid' && view !== 'list') throw new UserFacingError('作品视图无效。')
+    const date = new Date().toLocaleDateString('sv-SE')
+    const save = await dialog.showSaveDialog(mainWindow!, {
+      title: '导出追更小报备份', filters, defaultPath: join(dirname(store.dataPath), `追更小报-${date}.ehbackup`)
+    })
+    if (save.canceled || !save.filePath) return null
+    const path = save.filePath
+    if (!/\.ehbackup$/i.test(path)) throw new UserFacingError('请使用 .ehbackup 扩展名保存备份。')
+    await exportBackup(path, secret, view, store, tokens)
+    return path
+  }))
+  handle('import-backup', password => transfer(async () => {
+    const secret = text(password, 1024)
+    const source = await dialog.showOpenDialog(mainWindow!, { title: '导入追更小报备份', filters, properties: ['openFile'] })
+    if (source.canceled || !source.filePaths[0]) return null
+    const data = await readBackup(source.filePaths[0], secret)
+    const confirm = await dialog.showMessageBox(mainWindow!, { type: 'question', title: '恢复备份',
+      message: `用备份中的 ${data.watches.length} 部作品和 ${data.events.length} 条更新记录替换本机数据？`,
+      detail: '软件设置、QQ 推送配置和发送记录也会替换。历史消息不会重新推送。',
+      buttons: ['取消', '替换并导入'], defaultId: 0, cancelId: 0, noLink: true })
+    if (confirm.response !== 1) return null
+    await restoreBackup(data, store, tokens, () => {
+      service.assertIdle()
+      if (push.sending) throw new UserFacingError('QQ 消息正在发送，请稍后再导入。')
+    })
+    emitChanged()
+    mainWindow?.webContents.send('hongguo:push-changed')
+    return { watches: data.watches.length, events: data.events.length, view: data.view }
+  }))
   handle('cache-usage', updates.cacheUsage)
   handle('cache-clear', updates.clearCache)
   handle('push-panel', () => push.panel())
@@ -229,6 +275,10 @@ function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdat
   handle('app-update-check', updates.check)
   handle('app-update-install', updates.install)
   handle('browse', (query) => service.browse(browseQuery(query)))
+  handle('search-covers', ids => {
+    if (!Array.isArray(ids) || ids.length > 10) throw new Error('封面查询数量无效。')
+    return provider.searchCovers(ids.map(seriesId))
+  })
   handle('filters', (value) => service.filters(genre(value)))
   handle('details', (id) => service.details(seriesId(id)))
   handle('similar-series', id => provider.similarSeries(seriesId(id)))
@@ -289,10 +339,11 @@ if (!app.requestSingleInstanceLock()) {
     const covers = new CoverCache(dataPath)
     protocol.handle('hongguo-cover', request => covers.respond(request))
     const store = new Store(dataPath)
-    const push = new QqPush(store, {
+    const tokens: TokenStorage = {
       encrypt: token => safeStorage.encryptString(token).toString('base64'),
       decrypt: cipher => safeStorage.decryptString(Buffer.from(cipher, 'base64'))
-    }, () => {
+    }
+    const push = new QqPush(store, tokens, () => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hongguo:push-changed')
     })
     app.once('before-quit', () => push.stop())
@@ -301,7 +352,7 @@ if (!app.requestSingleInstanceLock()) {
     const updates = createAppUpdates(dataPath, portable, state => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hongguo:app-update', state)
     })
-    registerIpc(monitor, updates, push, provider)
+    registerIpc(monitor, updates, push, provider, store, tokens)
     tray = new Tray(shellIcon)
     tray.setToolTip(productName)
     tray.setContextMenu(

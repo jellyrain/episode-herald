@@ -243,6 +243,9 @@
 .dataLocation { display: grid; gap: 5px; padding: 13px 0; min-width: 0; }
 .dataLocation code { color: var(--muted); overflow-wrap: anywhere; user-select: text; font-size: 12px; }
 .cachePanel { padding: 14px 0; font-size: 13px; }
+.backupButtons { display: flex; gap: 8px; flex-wrap: wrap; }
+.backupNotice { overflow-wrap: anywhere; user-select: text; }
+.backupPassword { display: grid; gap: 5px; margin: 14px 0; font-size: 13px; }
 .cacheHeading { display: flex; align-items: center; gap: 12px; }
 .cacheBreakdown { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 12px 0 6px; }
 .cacheBreakdown dt, .cachePanel p { color: var(--muted); font-size: 12px; }

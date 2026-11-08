@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Checkbox, Spinner, TextField } from '@radix-ui/themes'
 import { Check, Plus, RefreshCw, Search } from 'lucide-react'
 import type { BrowsePage, BrowseQuery, FilterRow, WatchItem } from '../../../shared/types'
@@ -32,11 +32,11 @@ function Facet({ label, value, options, disabled, onChange }: {
 }
 
 export function Discover({ watches, busy, onOpen, onFollow }: { watches: WatchItem[]; busy: boolean; onOpen(id: string): void; onFollow(id: string): Promise<boolean> }): React.JSX.Element {
-  const [query, setQuery] = useState<BrowseQuery>({ mode: 'discover' })
+  const [query, selectQuery] = useState<BrowseQuery>({ mode: 'discover' })
   const [search, setSearch] = useState('')
   const [result, setResult] = useState<BrowsePage | null>(null)
   const [ranking, setRanking] = useState<Pick<BrowsePage, 'contents' | 'content' | 'board'>>({})
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [moreLoading, setMoreLoading] = useState(false)
   const [error, setError] = useState('')
   const [rows, setRows] = useState<FilterRow[]>([])
@@ -45,31 +45,51 @@ export function Discover({ watches, busy, onOpen, onFollow }: { watches: WatchIt
   const [adding, setAdding] = useState(false)
   const [revision, setRevision] = useState(0)
   const requestId = useRef(0)
-  const followed = new Set(watches.map(item => item.id))
+  const followed = useMemo(() => new Map(watches.map(item => [item.id, item.series.coverUrl])), [watches])
+  const followedRef = useRef(followed)
+  useEffect(() => { followedRef.current = followed }, [followed])
+  const fillSearchCovers = useCallback(async (page: BrowsePage, generation: number): Promise<void> => {
+    const ids = page.items.filter(item => !item.coverUrl && !followedRef.current.get(item.id)).map(item => item.id)
+    for (let i = 0; i < ids.length && generation === requestId.current; i += 10) {
+      try {
+        const urls = unwrap(await window.hongguo.searchCovers(ids.slice(i, i + 10)))
+        if (generation !== requestId.current) return
+        setResult(previous => previous && { ...previous, items: previous.items.map(item =>
+          !item.coverUrl && urls[item.id] ? { ...item, coverUrl: urls[item.id] } : item) })
+      } catch { /* A failed cover lookup must leave the search results usable. */ }
+    }
+  }, [])
   const genre = query.genre ?? 'short_play'
 
-  useEffect(() => {
-    const current = ++requestId.current
-    let alive = true
+  function setQuery(next: BrowseQuery): void {
     setSelected(new Set())
     setResult(null)
     setMoreLoading(false)
     setError('')
-    if (query.mode === 'search' && !query.query?.trim()) { setLoading(false); return }
-    setLoading(true)
+    setLoading(next.mode !== 'search' || Boolean(next.query?.trim()))
+    if (next.mode === 'filter' && (next === query || next.genre !== query.genre || query.mode !== 'filter')) {
+      setRows([])
+      setFilterError('')
+    }
+    if (next === query) setRevision(n => n + 1)
+    else selectQuery(next)
+  }
+  useEffect(() => {
+    const current = ++requestId.current
+    let alive = true
+    if (query.mode === 'search' && !query.query?.trim()) return
     void window.hongguo.browse(query.mode === 'filter' ? { ...query, genre: query.genre ?? 'short_play' } : query).then(unwrap).then(value => {
       if (!alive || current !== requestId.current) return
       setResult(value)
+      if (query.mode === 'search') void fillSearchCovers(value, current)
       if (query.mode === 'rank') setRanking({ contents: value.contents, content: value.content, board: value.board })
     }).catch(e => { if (alive && current === requestId.current) setError(messageOf(e)) }).finally(() => { if (alive && current === requestId.current) setLoading(false) })
-    return () => { alive = false }
-  }, [query, revision])
+    return () => { alive = false; requestId.current++ }
+  }, [query, revision, fillSearchCovers])
 
   useEffect(() => {
     if (query.mode !== 'filter') return
     let alive = true
-    setRows([])
-    setFilterError('')
     void window.hongguo.filters(genre).then(unwrap).then(value => { if (alive) setRows(value) }).catch(e => { if (alive) setFilterError(messageOf(e)) })
     return () => { alive = false }
   }, [genre, query.mode, revision])
@@ -83,6 +103,7 @@ export function Discover({ watches, busy, onOpen, onFollow }: { watches: WatchIt
       const next = unwrap(await window.hongguo.browse({ ...query, ...(query.mode === 'filter' ? { genre } : {}), cursor: result.cursor }))
       if (current !== requestId.current) return
       setResult(previous => previous ? { ...previous, ...next, items: Array.from(new Map([...previous.items, ...next.items].map(item => [item.id, item])).values()) } : next)
+      if (query.mode === 'search') void fillSearchCovers(next, current)
     } catch (e) { if (current === requestId.current) setError(messageOf(e)) }
     finally { if (current === requestId.current) setMoreLoading(false) }
   }
@@ -144,7 +165,7 @@ export function Discover({ watches, busy, onOpen, onFollow }: { watches: WatchIt
         options={query.mode === 'search' ? [...modes, { value: 'search', label: '搜索结果' }] : modes}
         onChange={mode => setQuery(mode === 'search' ? { mode, query: search.trim() } : { mode })} />
       <Button size="1" variant="ghost" color="gray" disabled={loading || adding}
-        onClick={() => setRevision(n => n + 1)}><RefreshCw size={14} />刷新</Button>
+        onClick={() => setQuery(query)}><RefreshCw size={14} />刷新</Button>
     </div>
 
     {query.mode === 'rank' && Boolean(ranking.contents?.length) && <section className={styles.filterPanel} aria-label="排行榜条件">
@@ -166,7 +187,7 @@ export function Discover({ watches, busy, onOpen, onFollow }: { watches: WatchIt
       {filterError && <ErrorBanner>{filterError}</ErrorBanner>}
     </section>}
     {error && <ErrorBanner>{error} <button className={styles.textButton}
-      onClick={() => result ? void loadMore() : setRevision(n => n + 1)}>重试</button></ErrorBanner>}
+      onClick={() => result ? void loadMore() : setQuery(query)}>重试</button></ErrorBanner>}
     {loading ? (
       <div className={styles.loadingState} role="status"><Spinner /><span>正在加载作品…</span></div>
     ) : result?.items.length ? <>
@@ -185,7 +206,7 @@ export function Discover({ watches, busy, onOpen, onFollow }: { watches: WatchIt
       <div className={styles.discoverGrid}>
         {result.items.map(item => <article key={item.id} className={styles.discoverCard} data-selected={selected.has(item.id)}>
           <button className={styles.coverButton} onClick={() => onOpen(item.id)} aria-label={'查看' + item.title}>
-            <Cover url={item.coverUrl} title={item.title} />
+            <Cover url={item.coverUrl ?? followed.get(item.id)} title={item.title} />
           </button>
           <div className={styles.discoverInfo}>
             <button className={styles.cardTitle} title={item.title} onClick={() => onOpen(item.id)}>{item.title}</button>

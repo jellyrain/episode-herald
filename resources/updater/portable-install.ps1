@@ -30,6 +30,9 @@ function MoveEntry([string]$source,[string]$destination) {
     if ($item.PSIsContainer) { [IO.Directory]::Move((LongPath $source),(LongPath $destination)) }
     else { [IO.File]::Move((LongPath $source),(LongPath $destination)) }
 }
+function StartUpdatedApp {
+    Start-Process -FilePath (Join-Path $directory $job.executable) -WorkingDirectory $directory -WindowStyle Normal -ErrorAction Stop | Out-Null
+}
 $oldMoved = New-Object 'Collections.Generic.List[string]'
 $newMoved = New-Object 'Collections.Generic.List[string]'
 $directory = [IO.Path]::GetFullPath($job.directory)
@@ -90,14 +93,14 @@ try {
         }
     }
     foreach ($name in $newRoots) { MoveEntry (Join-Path $staged $name) (Join-Path $directory $name); $newMoved.Add($name) }
-    Start-Process -FilePath (Join-Path $directory $job.executable) -WorkingDirectory $directory -WindowStyle Hidden -ErrorAction Stop | Out-Null
+    StartUpdatedApp
     [IO.File]::WriteAllText($job.result,(@{ok=$true;backup=$backup;version=$job.version} | ConvertTo-Json))
 } catch {
     $failure=$_.Exception.Message
     try {
         for ($i=$newMoved.Count-1; $i -ge 0; $i--) { $name=$newMoved[$i]; MoveEntry (Join-Path $directory $name) (Join-Path $staged $name) }
         for ($i=$oldMoved.Count-1; $i -ge 0; $i--) { $name=$oldMoved[$i]; MoveEntry (Join-Path $backup $name) (Join-Path $directory $name) }
-        if ($oldMoved.Count) { Start-Process -FilePath (Join-Path $directory $job.executable) -WorkingDirectory $directory -WindowStyle Hidden -ErrorAction Stop | Out-Null }
+        if ($oldMoved.Count) { StartUpdatedApp }
     } catch { $failure += ' Recovery: '+$_.Exception.Message }
     [IO.File]::WriteAllText($job.result,(@{ok=$false;error=$failure;backup=$backup} | ConvertTo-Json)); exit 1
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Dialog, Spinner, Switch } from '@radix-ui/themes'
 import { Check, ChevronLeft, Plus } from 'lucide-react'
 import type { SeasonCard, SeriesDetails, WatchItem } from '../../../shared/types'
+import { orderedSeasons, releasedSeasonFor } from '../../../shared/seasons'
 import { Tags } from './PageControls'
 import { Cover, ErrorBanner } from './Common'
 import { SeasonRows, SimilarShows, SourceNovel } from './DetailExtras'
@@ -37,9 +38,14 @@ export function SeriesDialog({ id, knownSeasons, watches, busy, mutationError, p
   const seasons = useMemo(() => {
     if (!knownSeasons) return details?.seasons ?? []
     if (!details) return knownSeasons
-    const byId = new Map(knownSeasons.map(season => [season.id, season]))
-    for (const season of details.seasons) byId.set(season.id, season)
-    return [...byId.values()].sort((a, b) => (a.index ?? Infinity) - (b.index ?? Infinity))
+    if (details.directoryComplete) return details.seasons
+    const byId = new Map(details.seasons.map(season => [season.id, season]))
+    for (const season of knownSeasons) {
+      const current = byId.get(season.id)
+      if (current) byId.set(season.id, { ...current, index: current.index ?? season.index })
+      else if (details.seasonWarning || !releasedSeasonFor(season, details.seasons)) byId.set(season.id, season)
+    }
+    return orderedSeasons([...byId.values()])
   }, [details, knownSeasons])
   const watch = watches.find(item => item.id === id)
   const seriesWatch = watches.find(item => item.watchSeasons && seasons.some(season => season.id === item.id))

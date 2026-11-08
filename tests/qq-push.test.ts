@@ -118,6 +118,7 @@ test('normal monitoring pushes a newly listed season and its first episodes even
   const next = {id:'10002',title:'第二季',index:2,episodeCount:0}
   let announced = false
   const provider: MonitorProvider = {
+    async seasonDirectory() { return { seasons: announced ? [first, next] : [first] } },
     async inspect(id, related = true) {
       const season = id === first.id ? first : next
       return {series:{...season,tags:[]},seasons:related && announced ? [first,next] : [season],seasonListAvailable:related}

@@ -29,6 +29,76 @@ const panel = [{ key: 'category_dim_theme', name: '题材', options: [
   { name: '都市爱情', value: 'city' }, { name: '爱情', value: 'love' }, { name: '重生', value: 'rebirth' }
 ] }]
 
+test('search detail covers match the requested IDs even when the SDK returns them out of order or omits one', async () => {
+  const api = provider({ getSeriesBatch: async ids => {
+    assert.deepEqual(ids,['10001','10002','10003'])
+    return [
+      { series: { ...root,id:'10003',cover_url:'//p3.byteimg.com/three.heic' },episodes:[] },
+      { series: { ...root,id:'10004',cover_url:'https://p3.byteimg.com/other' },episodes:[] },
+      { series: { ...root,id:'10001',cover_url:'http://p3.byteimg.com/one.heic' },episodes:[] }
+    ]
+  } })
+  assert.deepEqual(await api.searchCovers(['10001','10002','10001','10003']),{
+    '10001':'https://p3.byteimg.com/one.heic','10003':'https://p3.byteimg.com/three.heic'
+  })
+  await assert.rejects(api.searchCovers(['bad']), /编号/)
+})
+
+test('routine season lookup takes published counts from one SDK album call and leaves a reservation count unknown', async () => {
+  const calls: string[] = []
+  const api = provider({
+    seasons: async id => { calls.push(id); return album },
+    getSeries: async () => assert.fail('unexpected season detail request'),
+    listEpisodes: async () => assert.fail('unexpected episode request')
+  })
+  const directory = await api.seasonDirectory(root.id)
+  assert.deepEqual(calls, [root.id])
+  assert.equal(directory.expectedCount, 3)
+  assert.deepEqual(directory.seasons.map(row => [row.id, row.episodeCount]), [
+    [root.id, 112], ['10002', 125], ['10003', undefined]
+  ])
+})
+
+test('details sort an unnumbered 第五季 after season four, including when that season is selected', async () => {
+  const rows = [
+    { series_id: '70005', title: '重生之绝世仙帝第五季', index: 0, episode_count: 131 },
+    ...[1, 2, 3, 4].map(index => ({ series_id: String(70000 + index), title: '重生之绝世仙帝', index, episode_count: 113 }))
+  ]
+  const api = provider({
+    seasons: async () => ({ id: '79000', season_count: 5, seasons: rows }),
+    getSeries: async id => {
+      const row = rows.find(season => season.series_id === id)!
+      return { id, title: row.title, episode_count: row.episode_count }
+    }
+  })
+  for (const id of ['70001', '70005']) {
+    const { seasons } = await api.details(id)
+    assert.deepEqual(seasons.map(row => row.index), [1, 2, 3, 4, 5])
+    assert.deepEqual([seasons[4].id, seasons[4].episodeCount], ['70005', 131])
+  }
+})
+
+test('a later album tag reorders an unnumbered title and overrides an outdated number in its own details', async () => {
+  const rows = [
+    { series_id: '70006', title: '仙途终章', index: 6 },
+    { series_id: '70005', title: '归来篇', index: 0 },
+    { series_id: '70001', title: '仙途', index: 1 }
+  ]
+  const api = provider({
+    seasons: async () => ({ id: '79000', season_count: 3, seasons: rows }),
+    getSeries: async id => ({ id, title: rows.find(row => row.series_id === id)!.title, season_index: id === '70005' ? 6 : 1 })
+  })
+  const before = await api.details('70001')
+  assert.deepEqual(before.seasons.map(row => row.index), [1, 6, undefined])
+  rows[1].index = 5
+  for (const selected of ['70001', '70005']) {
+    const after = await api.details(selected)
+    assert.equal(after.directoryComplete, true)
+    assert.deepEqual(after.seasons.map(row => row.index), [1, 5, 6])
+    assert.equal(after.seasons[1].title, '归来篇')
+  }
+})
+
 test('original novel metadata comes from the existing series request, including when the album fails', async () => {
   const calls: string[] = []
   const api = provider({

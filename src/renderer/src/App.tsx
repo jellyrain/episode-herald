@@ -171,7 +171,9 @@ export default function App(): React.JSX.Element {
               </>}
               {pushOpened && <div hidden={page !== 'push'}><PushPage desktop={snapshot.settings.desktopNotifications} busy={busy}
                 setDesktop={value => void mutate(() => window.hongguo.saveSettings({ ...snapshot.settings, desktopNotifications: value }), '桌面通知设置已保存。')} /></div>}
-              <div hidden={page !== 'settings'}><SettingsPage visible={page === 'settings'} settings={snapshot.settings} dataPath={snapshot.dataPath} busy={busy} onSave={settings => mutate(() => window.hongguo.saveSettings(settings), '设置已保存。')} /></div>
+              <div hidden={page !== 'settings'}><SettingsPage visible={page === 'settings'} settings={snapshot.settings} dataPath={snapshot.dataPath} busy={busy}
+                onRestored={() => { setPushOpened(false); setDiscoveryOpened(false); void refresh() }}
+                onSave={settings => mutate(() => window.hongguo.saveSettings(settings), '设置已保存。')} /></div>
             </>}
 
           </main>

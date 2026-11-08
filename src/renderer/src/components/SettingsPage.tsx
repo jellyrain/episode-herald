@@ -3,6 +3,7 @@ import { Button, Switch, TextField } from '@radix-ui/themes'
 import { Save } from 'lucide-react'
 import { Choices, PageHeader } from './PageControls'
 import { CacheSection } from './CacheSection'
+import { BackupSection } from './BackupSection'
 import type { AppUpdate, Settings } from '../../../shared/types'
 import styles from '../App.module.css'
 
@@ -59,7 +60,7 @@ function SoftwareUpdate(): React.JSX.Element {
   </section>
 }
 
-export function SettingsPage({ visible, settings, dataPath, busy, onSave }: { visible: boolean; settings: Settings; dataPath: string; busy: boolean; onSave(settings: Settings): Promise<boolean> }): React.JSX.Element {
+export function SettingsPage({ visible, settings, dataPath, busy, onSave, onRestored }: { visible: boolean; settings: Settings; dataPath: string; busy: boolean; onSave(settings: Settings): Promise<boolean>; onRestored(): void }): React.JSX.Element {
   // A patch preserves unfinished edits when navigating away and follows external theme changes.
   const [patch, setPatch] = useState<Partial<Settings>>({})
   const draft = { ...settings, ...patch }
@@ -112,7 +113,7 @@ export function SettingsPage({ visible, settings, dataPath, busy, onSave }: { vi
           <code>{dataPath}</code>
         </div>
       </section>
-      {visible && <CacheSection />}
+      {visible && <><BackupSection busy={busy} onRestored={() => { setPatch({}); onRestored() }} /><CacheSection /></>}
     </div>
     {dirty && <div className={styles.draftBar} role="status">
       <span>{validTime ? '有未保存的设置' : '请填写有效的检查时间。'}</span>

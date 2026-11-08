@@ -1,5 +1,7 @@
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export type ThemeMode = 'dark' | 'light'
+export type WatchView = 'list' | 'grid'
+export interface ImportSummary { watches: number; events: number; view: WatchView }
 export type BrowseMode = 'discover' | 'search' | 'rank' | 'filter'
 
 export interface SeriesCard {
@@ -40,6 +42,8 @@ export interface OriginalNovel {
 export interface SeriesDetails {
   series: SeriesCard
   seasons: SeasonCard[]
+  /** The catalogue returned its declared number of distinct rows, including the selected work. */
+  directoryComplete?: boolean
   seasonWarning?: string
   originalNovel?: OriginalNovel
 }
@@ -168,6 +172,8 @@ export interface CacheCleanup {
 }
 
 export interface HongguoAPI {
+  exportBackup(password: string, view: WatchView): Promise<Result<string | null>>
+  importBackup(password: string): Promise<Result<ImportSummary | null>>
   cacheUsage(): Promise<Result<CacheUsage>>
   clearCache(): Promise<Result<CacheCleanup>>
   pushPanel(): Promise<Result<PushPanel>>
@@ -182,6 +188,7 @@ export interface HongguoAPI {
   onAppUpdate(listener: (update: AppUpdate) => void): () => void
   snapshot(): Promise<Result<Snapshot>>
   browse(query: BrowseQuery): Promise<Result<BrowsePage>>
+  searchCovers(ids: string[]): Promise<Result<Record<string, string>>>
   filters(genre: string): Promise<Result<FilterRow[]>>
   details(id: string): Promise<Result<SeriesDetails>>
   similarSeries(id: string): Promise<Result<SimilarSeries[]>>
