@@ -14,11 +14,10 @@ export function latestDueTime(now: Date, time: string): Date {
 }
 
 /** Never accept a truncated response as the new baseline or notify from it. */
-export function compareEpisodes(previous: string[], current: string[], expectedCount?: number): string[] {
+export function compareEpisodes(previous: string[], current: string[]): string[] {
   const next = new Set(current)
-  if ((expectedCount !== undefined && next.size < expectedCount) || previous.some((id) => !next.has(id))) {
-    throw new UserFacingError('分集列表不完整，已保留上次结果。')
-  }
+  const missing = previous.filter(id => !next.has(id)).length
+  if (missing) throw new UserFacingError(`本次分集明细缺少已收录的 ${missing} 个分集编号，已保留原进度。`)
   const known = new Set(previous)
   return [...next].filter((id) => !known.has(id))
 }
@@ -35,14 +34,7 @@ function hasPublishedEpisodes(season: SeasonState): boolean {
   return season.episodeIds.length > 0 || (season.episodeCount ?? 0) > 0
 }
 
-function upcomingSeasonIds(seasons: SeasonState[]): Set<string> {
-  const released = seasons.filter(hasPublishedEpisodes)
-  const lastPublished = Math.max(0, ...released.map(s => s.index ?? 0))
-  return new Set(lastPublished > 0 ? seasons.filter(s => (s.index ?? 0) > lastPublished).map(s => s.id) : [])
-}
-
 export type MonitorProvider = Pick<Provider, 'browse' | 'filters' | 'details' | 'inspect' | 'seasonDirectory' | 'episodeIds'>
-type CheckInspection = Inspection & { compareDirectoryCounts?: boolean }
 
 /** An album can swap a reservation ID for its published ID. Resolve all missing rows
  * before changing any of them, so a partial directory cannot erase watch history. */
@@ -148,7 +140,7 @@ export class Monitor {
       const record: WatchRecord = {
         item: {
           id,
-          series: inspection.series,
+          series: { ...inspection.series, episodeCount: undefined },
           paused: false,
           watchSeasons: true,
           addedAt: new Date().toISOString(),
@@ -219,11 +211,11 @@ export class Monitor {
     if (id !== undefined) validateId(id)
     const records = id ? [this.store.watch(id)].filter((record): record is WatchRecord => Boolean(record)) : this.store.watches().filter((record) => !record.item.paused)
     if (!records.length) throw new UserFacingError('暂时没有可检查的作品，请先添加追更。')
-    await this.runChecks(records)
+    await this.runChecks(records, id !== undefined)
     return this.snapshot()
   }
 
-  private async runChecks(records: WatchRecord[]): Promise<void> {
+  private async runChecks(records: WatchRecord[], checkAllSeasons = false): Promise<void> {
     if (this.checking) return
     this.checking = true
     this.onChanged()
@@ -232,7 +224,7 @@ export class Monitor {
     let completed = 0
     try {
       for (const record of records) {
-        const result = await this.checkRecord(record)
+        const result = await this.checkRecord(record, undefined, checkAllSeasons)
         completed++
         if (result.failed) failures++
         changes += result.events
@@ -248,18 +240,20 @@ export class Monitor {
     }
   }
 
-  private async inspectForCheck(record: WatchRecord): Promise<CheckInspection> {
+  private async inspectForCheck(record: WatchRecord): Promise<Inspection> {
     const { id, series, watchSeasons } = record.item
-    if (!watchSeasons) return this.provider.inspect(id, false)
-
     const known = Object.keys(record.seasons)
     let directory: Awaited<ReturnType<Provider['seasonDirectory']>>
     try {
       directory = await this.provider.seasonDirectory(id)
     } catch (error) {
       const noAlbum = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ALBUM_UNAVAILABLE'
-      if (!noAlbum || known.length > 1) throw error
+      if (!noAlbum || (watchSeasons && known.length > 1)) throw error
       directory = { seasons: [] }
+    }
+    if (!watchSeasons) {
+      const root = directory.seasons.find(row => row.id === id) ?? { id, title: series.title }
+      return { series, seasons: [root], seasonListAvailable: false }
     }
     if (!directory.seasons.length && known.length <= 1 && (directory.expectedCount ?? 0) <= 1) {
       const single = await this.provider.inspect(id, false)
@@ -271,23 +265,23 @@ export class Monitor {
       reconcileReservationIds(record, seasons, byId.size === directory.expectedCount)
     return {
       series: { ...series, coverUrl: directory.coverUrl ?? series.coverUrl },
-      seasons, seasonListAvailable: complete, compareDirectoryCounts: true,
+      seasons, seasonListAvailable: complete,
       seasonWarning: complete ? undefined : '本次关联季列表不完整，已保留原有进度，下次检查时重试。'
     }
   }
 
-  private async checkRecord(record: WatchRecord, existingInspection?: Inspection): Promise<{ failed: boolean; events: number }> {
+  private async checkRecord(record: WatchRecord, existingInspection?: Inspection, checkAllSeasons = false): Promise<{ failed: boolean; events: number }> {
     const now = new Date().toISOString()
     const previouslyReady = record.item.baselineReady
     const events: UpdateEvent[] = []
     const errors: string[] = []
     try {
-      const inspection: CheckInspection = existingInspection ?? await this.inspectForCheck(record)
+      const inspection = existingInspection ?? await this.inspectForCheck(record)
       const rootBaseline = record.seasons[record.item.id]
       record.item.series = {
         ...inspection.series,
         coverUrl: inspection.series.coverUrl ?? record.item.series.coverUrl,
-        episodeCount: rootBaseline?.baselineReady ? rootBaseline.episodeIds.length : record.item.series.episodeCount
+        episodeCount: rootBaseline?.episodeIds.length || (rootBaseline?.baselineReady ? 0 : undefined)
       }
       if (inspection.seasonWarning) errors.push(inspection.seasonWarning)
       const seasonBaselineReady = record.seasonBaselineReady
@@ -297,9 +291,10 @@ export class Monitor {
         const index = seasonNumber(season) ?? previous?.index
         if (!previous) {
           const discoveredLater = record.item.watchSeasons && seasonBaselineReady && season.id !== record.item.id
-          record.seasons[season.id] = { ...season, index, episodeIds: [], baselineReady: false, seasonNoticePending: discoveredLater, firstEpisodesPending: discoveredLater }
+          record.seasons[season.id] = { ...season, index, episodeCount: undefined, episodeIds: [], baselineReady: false, seasonNoticePending: discoveredLater, firstEpisodesPending: discoveredLater }
         } else {
-          record.seasons[season.id] = { ...previous, ...season, index, missingFromDirectory: undefined, episodeCount: season.episodeCount ?? previous.episodeCount }
+          record.seasons[season.id] = { ...previous, ...season, index, missingFromDirectory: undefined,
+            episodeCount: previous.episodeIds.length || (previous.baselineReady ? 0 : undefined) }
         }
       }
       const announcedThisCheck = new Set<string>()
@@ -316,34 +311,39 @@ export class Monitor {
         }
         record.seasonBaselineReady = true
       }
-      // SDK 0.2 does not expose the mobile reservation button. Require a listed
-      // later season after a known release as well as a pending endpoint response.
-      const candidates = inspection.seasonListAvailable ? upcomingSeasonIds(incoming.map(s => record.seasons[s.id])) : new Set<string>()
+      // Only an observed episode ID proves that a season has premiered. Take this
+      // snapshot before polling so the plan is independent of directory row order.
+      const released = Object.values(record.seasons).filter(s => !s.missingFromDirectory && s.episodeIds.length > 0)
+      const latestIndex = Math.max(0, ...released.map(s => s.index ?? 0))
+      // The catalogue also supplies context for recognizing a reservation on first follow.
+      const latestListedIndex = Math.max(latestIndex, ...incoming.filter(s => (s.episodeCount ?? 0) > 0)
+        .map(s => record.seasons[s.id].index ?? 0))
       for (const row of incoming) {
         const season = record.seasons[row.id]
-        const expectedCount = season.episodeCount
-        const listedUpcoming = candidates.has(season.id) || season.awaitingPremiere
-        const canAwaitPremiere = season.id !== record.item.id && !hasPublishedEpisodes(season) && listedUpcoming
-        if (!canAwaitPremiere) season.awaitingPremiere = false
+        const directoryCount = row.episodeCount
+        const listedUpcoming = inspection.seasonListAvailable && latestListedIndex > 0 && (season.index ?? 0) > latestListedIndex
+        const canAwaitPremiere = season.id !== record.item.id && !season.episodeIds.length && !directoryCount &&
+          (listedUpcoming || season.awaitingPremiere)
         try {
-          // Retry if a previous expansion returned fewer IDs than the directory promised.
-          const verifyReservation = canAwaitPremiere && !season.awaitingPremiere
-          const alreadyVerified = inspection.compareDirectoryCounts && season.baselineReady && !verifyReservation && (expectedCount ?? 0) <= season.episodeIds.length
+          // A released season without a number cannot safely be ranked behind the latest.
+          const latest = season.episodeIds.length > 0 && (!season.index || season.index === latestIndex)
+          const needsDetails = checkAllSeasons || !season.baselineReady || !season.episodeIds.length ||
+            directoryCount !== season.episodeIds.length || latest || !record.item.watchSeasons
           const deferredPremiere = season.firstEpisodesPending && season.episodeIds.length > 0 && !season.seasonNoticePending
-          if (alreadyVerified && !deferredPremiere) continue
-          const allowEmpty = canAwaitPremiere || (!season.episodeIds.length && (expectedCount === 0 ||
-            (expectedCount === undefined && Boolean(season.firstEpisodesPending))))
-          const ids = alreadyVerified ? season.episodeIds : await this.provider.episodeIds(season.id, allowEmpty)
+          if (!needsDetails && !deferredPremiere) continue
+          const allowEmpty = Boolean(season.awaitingPremiere || canAwaitPremiere) || (!season.episodeIds.length && (directoryCount === 0 ||
+            (directoryCount === undefined && Boolean(season.firstEpisodesPending))))
+          const ids = needsDetails ? await this.provider.episodeIds(season.id, allowEmpty) : season.episodeIds
           if (canAwaitPremiere && !ids.length) season.awaitingPremiere = true
           // An omitted count is unknown, not evidence of a zero-episode baseline.
           // Keep the first-publication marker until a nonempty complete response arrives.
-          const freshIds = compareEpisodes(season.episodeIds, ids, season.awaitingPremiere && !ids.length ? 0 : expectedCount)
+          const freshIds = compareEpisodes(season.episodeIds, ids)
           const added = deferredPremiere ? ids : freshIds
           if ((season.baselineReady || season.firstEpisodesPending) && added.length && !season.seasonNoticePending && !announcedThisCheck.has(season.id)) {
             events.push({ id: eventId(record.item.id, 'episodes', season.id, added), watchId: record.item.id, seriesId: season.id, title: season.title, kind: 'episodes', message: `新增 ${added.length} 集，现有 ${ids.length} 集。`, createdAt: now, read: false })
           }
           season.episodeIds = ids
-          if (ids.length > 0 || expectedCount !== undefined) season.episodeCount = ids.length
+          if (ids.length > 0 || directoryCount !== undefined) season.episodeCount = ids.length
           season.baselineReady = true
           if (ids.length) {
             season.awaitingPremiere = false
@@ -358,7 +358,7 @@ export class Monitor {
             season.awaitingPremiere = true
             season.baselineReady = true
           } else if (!hasPublishedEpisodes(season) && isUnavailable(error) &&
-              (expectedCount === 0 || (expectedCount === undefined && season.firstEpisodesPending))) {
+              (directoryCount === 0 || (directoryCount === undefined && season.firstEpisodesPending))) {
             season.baselineReady = true
           } else {
             errors.push(`${season.title}：${toUserMessage(error)}`)

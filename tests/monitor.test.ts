@@ -225,8 +225,12 @@ test('a missing season keeps its progress and is checked on return; disabling re
 
   monitor.updateWatch(first, { watchSeasons: false })
   provider.inspections.length = 0
+  provider.episodeCalls.length = 0
+  provider.directoryCalls.length = 0
   await monitor.checkNow()
-  assert.deepEqual(provider.inspections, [first])
+  assert.deepEqual(provider.directoryCalls, [first])
+  assert.deepEqual(provider.inspections, [])
+  assert.deepEqual(provider.episodeCalls, [first])
   assert.equal(monitor.snapshot().watches[0].seasonCount, 2)
 })
 
@@ -354,8 +358,8 @@ test('a newly discovered season with an omitted count reports first publication 
   provider.failures.clear()
   provider.episodes.set(second, [episode2, episode3])
   await monitor.checkNow()
-  assert.deepEqual(provider.episodeCalls, [])
-  assert.equal(monitor.snapshot().events.length, 1)
+  assert.deepEqual(provider.episodeCalls, [first, second, first, second])
+  assert.equal(monitor.snapshot().events.length, 2)
   provider.entries.get(first)!.seasons[0].episodeCount = 2
   await monitor.checkNow()
   await monitor.checkNow()
@@ -379,7 +383,7 @@ test('an initial unknown-count season with an unavailable baseline does not repo
   assert.equal(monitor.snapshot().events.length, 0)
 })
 
-test('a listed reservation stays quiet until a reported increase, then reports only verified episodes', async context => {
+test('a listed reservation is polled with the latest release and reports only verified episodes', async context => {
   const { monitor, provider, notices } = fixture(context)
   const limited = Object.assign(new Error(), { code: 'ANONYMOUS_LIMITED' })
   provider.add(first, '第一季', [episode1])
@@ -399,7 +403,7 @@ test('a listed reservation stays quiet until a reported increase, then reports o
   assert.equal((await monitor.details(second)).seasons.find(s => s.id === third)?.episodeCount, undefined)
   provider.episodeCalls.length = 0
   await monitor.checkNow()
-  assert.deepEqual(provider.episodeCalls, [])
+  assert.deepEqual(provider.episodeCalls, [second, third])
   assert.equal(notices.length, 0)
 
   directory[2].episodeCount = 1
@@ -469,7 +473,7 @@ test('a v1.0.2 published flag without any episodes cannot hide a numbered reserv
   provider.entries.get(first)!.seasons[1].episodeCount = 2
   await monitor.checkNow()
   assert.match(watch().lastError!, /匿名查询/)
-  assert.deepEqual(watch().reservationSeasons, [])
+  assert.deepEqual(watch().reservationSeasons, [{ id: second, index: 6 }])
   provider.failures.clear()
   provider.entries.get(second)!.count = 2
   provider.episodes.set(second, [episode2, episode3])
@@ -547,7 +551,7 @@ for (const previousRelease of ['new', 'deferred', 'announced'] as const) {
     assert.equal(watch.knownEpisodeCount, 135)
     assert.deepEqual(events.map(e => [e.kind, e.seriesId]), [[previousRelease === 'announced' ? 'season' : 'episodes', release.id]])
     assert.match(events[0].message, /131 集/)
-    assert.deepEqual(provider.episodeCalls, previousRelease === 'new' ? [release.id] : [])
+    assert.deepEqual(provider.episodeCalls, previousRelease === 'new' ? [rows[3].id, release.id] : [release.id])
     await monitor.checkNow()
     assert.equal(notices.length, previousRelease === 'announced' ? 0 : 1)
     assert.deepEqual(provider.directoryCalls, [root, root])
@@ -562,7 +566,7 @@ for (const previousRelease of ['new', 'deferred', 'announced'] as const) {
 }
 
 for (const replacedReservation of [false, true]) {
-  test(`an unnumbered release acquires season tag five without extra episodes or push (old reservation: ${replacedReservation})`, async context => {
+  test(`an unnumbered release is polled and acquires season tag five without a duplicate push (old reservation: ${replacedReservation})`, async context => {
     const { monitor, provider, notices, dataPath } = fixture(context)
     const rows: SeasonCard[] = [1, 2, 3, 4].map(index => {
       const id = String(71000 + index)
@@ -587,7 +591,7 @@ for (const replacedReservation of [false, true]) {
     assert.equal(watch().lastError, undefined)
     assert.equal(watch().seasonCount, 5)
     assert.deepEqual(watch().reservationSeasons, [])
-    assert.deepEqual(provider.episodeCalls, [release.id])
+    assert.deepEqual(provider.episodeCalls, [rows[3].id, release.id])
     assert.equal(notices.length, 1)
     const before = monitor.snapshot().events
     assert.deepEqual(before.map(e => e.seriesId), [release.id])
@@ -596,11 +600,14 @@ for (const replacedReservation of [false, true]) {
       const pending = db.watch(root)!
       assert.equal(pending.seasons[release.id].index, undefined)
       if (replacedReservation) assert.ok(pending.seasons[reservation.id].missingFromDirectory)
+      provider.episodeCalls.length = 0
       await monitor.checkNow()
+      assert.deepEqual(provider.episodeCalls, [rows[3].id, release.id])
       // The platform can retag the same item without renaming it or changing its episodes.
       release.index = 5
+      provider.episodeCalls.length = 0
       const reopened = new Monitor(dataPath, () => {}, () => assert.fail('a tag edit must not notify'), provider)
-      try { await reopened.checkNow(root) } finally { reopened.dispose() }
+      try { await reopened.checkNow() } finally { reopened.dispose() }
       const tagged = db.watch(root)!
       assert.equal(tagged.seasons[release.id].index, 5)
       assert.equal(tagged.seasons[reservation.id], undefined)
@@ -668,7 +675,7 @@ test('a partial or ambiguous list cannot remove a saved reservation', async cont
   finally { db.close() }
 })
 
-test('16 seasons with two reservations need just one directory read per unchanged check', async context => {
+test('16 seasons: poll the latest release, all pending seasons and both directions of count mismatch once per cycle', async context => {
   const { monitor, provider, dataPath, notices } = fixture(context)
   const rows: SeasonCard[] = Array.from({ length: 16 }, (_, i) => {
     const id = String(80001 + i)
@@ -683,61 +690,99 @@ test('16 seasons with two reservations need just one directory read per unchange
   await monitor.follow(root)
   const watch = () => monitor.snapshot().watches[0]
   assert.deepEqual(watch().reservationSeasons?.map(s => s.index), [15, 16])
-  async function check(expectedEpisodes: string[], instance = monitor): Promise<void> {
+  async function check(expected: SeasonCard[], instance = monitor, singleWork = false): Promise<void> {
     provider.directoryCalls.length = provider.inspections.length = provider.episodeCalls.length = 0
-    await instance.checkNow(root)
+    await instance.checkNow(singleWork ? root : undefined)
     assert.deepEqual(provider.directoryCalls, [root])
     assert.deepEqual(provider.inspections, [])
-    assert.deepEqual(provider.episodeCalls, expectedEpisodes)
+    assert.deepEqual(provider.episodeCalls, expected.map(row => row.id))
   }
-  await check([])
-  await check([])
+  const active = [current, reserved15, reserved16]
+  await check(active)
+  await check(active)
   assert.equal(notices.length, 0)
 
-  // Missing or regressing metadata must not reset the latest published season.
-  current.episodeCount = undefined
+  // The latest release gains an episode without a directory change; the next run must not repeat the alert.
+  provider.episodes.get(current.id)!.push('90001')
+  await check(active)
+  assert.equal(monitor.snapshot().events[0].seriesId, current.id)
+  assert.match(monitor.snapshot().events[0].message, /新增 1 集，现有 203 集/)
+  current.episodeCount = 203
+  older.episodeCount = 2
+  await check([older, ...active])
+  await check([older, ...active])
   older.episodeCount = 0
-  await check([])
-  assert.equal(watch().knownEpisodeCount, 215)
-  current.episodeCount = 202
+  await check([older, ...active])
+  assert.equal(watch().lastError, undefined)
+  assert.equal(notices.length, 1)
   older.episodeCount = 1
+
+  // Directory still says both are reservable; 16 premieres before 15.
+  provider.episodes.set(reserved16.id, ['90002', '90003'])
+  await check(active)
+  assert.deepEqual(watch().reservationSeasons?.map(s => s.index), [15])
+  assert.equal(monitor.snapshot().events[0].seriesId, reserved16.id)
+  assert.match(monitor.snapshot().events[0].message, /新增 2 集/)
+  reserved16.episodeCount = 2
+  const reopened = new Monitor(dataPath, () => {}, () => assert.fail('the persisted baseline must suppress duplicate updates'), provider)
+  try { await check([reserved15, reserved16], reopened) } finally { reopened.dispose() }
+  provider.episodes.set(reserved15.id, ['90004'])
+  await check([reserved15, reserved16])
+  assert.deepEqual(watch().reservationSeasons, [])
+  reserved15.episodeCount = 1
+  await check([reserved16])
+  assert.equal(notices.length, 3)
+
+  const next = { id: '80017', title: '万妖图录传 第 17 季', index: 17 }
+  provider.add(next.id, next.title)
+  rows.push(next)
+  await check([reserved16, next])
+  await check([reserved16, next])
+  assert.deepEqual(watch().reservationSeasons?.map(s => s.index), [17])
+  assert.equal(monitor.snapshot().events.filter(e => e.seriesId === next.id && e.kind === 'season').length, 1)
+
   provider.directoryFailures.set(root, Object.assign(new Error(), { code: 'RATE_LIMITED' }))
   await check([])
   assert.match(watch().lastError!, /请求频率/)
   provider.directoryFailures.clear()
-
-  // Season 16 can premiere ahead of 15. A partial list must survive a restart and retry.
-  reserved16.episodeCount = 2
-  provider.episodes.set(reserved16.id, ['90001'])
-  await check([reserved16.id])
-  assert.match(watch().lastError!, /分集列表不完整/)
-  assert.equal(notices.length, 0)
-  reserved16.episodeCount = undefined
-  const reopened = new Monitor(dataPath, () => {}, () => {}, provider)
-  try {
-    provider.episodes.set(reserved16.id, ['90001', '90002'])
-    await check([reserved16.id], reopened)
-  } finally { reopened.dispose() }
-  assert.deepEqual(watch().reservationSeasons?.map(s => s.index), [15])
-  assert.equal(monitor.snapshot().events.length, 1)
-  assert.match(monitor.snapshot().events[0].message, /新增 2 集/)
-  await check([])
-
-  reserved15.episodeCount = 1
-  provider.episodes.set(reserved15.id, ['90003'])
-  await check([reserved15.id])
-  assert.deepEqual(watch().reservationSeasons, [])
-
-  // A previously unknown season is announced once, even before it has a count.
-  const next = { id: '80017', title: '万妖图录传 第 17 季', index: 17 }
-  provider.add(next.id, next.title)
-  rows.push(next)
-  await check([next.id])
-  await check([])
-  assert.deepEqual(watch().reservationSeasons?.map(s => s.index), [17])
-  assert.equal(monitor.snapshot().events.filter(e => e.seriesId === next.id && e.kind === 'season').length, 1)
-  assert.equal(monitor.snapshot().events.length, 3)
+  await check(rows, monitor, true)
+  assert.equal(watch().lastError, undefined)
+  assert.equal(notices.length, 4)
 })
+
+for (const count of [69, 113]) {
+  test(`a persistent ${count + 1}/${count} discrepancy is checked every time, without treating the directory count as an episode`, async context => {
+    const { monitor, provider, notices } = fixture(context)
+    const ids = Array.from({length: count}, (_, i) => String(90000 + i))
+    provider.add(first, '作品第一季', ids)
+    provider.add(second, '作品第二季', [episode1])
+    const directory = provider.entries.get(first)!
+    directory.count = count + 1
+    directory.seasons = [{id: second, title: '作品第二季', index: 2, episodeCount: 1}]
+    await monitor.follow(first)
+    for (let i = 0; i < 2; i++) {
+      provider.episodeCalls.length = 0
+      await monitor.checkNow()
+      assert.deepEqual(provider.episodeCalls, [first, second])
+      const [watch] = monitor.snapshot().watches
+      assert.equal(watch.series.episodeCount, count)
+      assert.equal(watch.lastError, undefined)
+      assert.equal(notices.length, 0)
+    }
+    provider.episodes.set(first, [...ids.slice(1), episode2])
+    await monitor.checkNow()
+    assert.match(monitor.snapshot().watches[0].lastError!, /缺少已收录的 1 个分集编号/)
+    assert.equal(notices.length, 0)
+    provider.episodes.set(first, [...ids, episode2])
+    await monitor.checkNow()
+    assert.match(monitor.snapshot().events[0].message, new RegExp(`新增 1 集，现有 ${count + 1} 集`))
+    assert.equal(monitor.snapshot().watches[0].lastError, undefined)
+    provider.episodeCalls.length = 0
+    await monitor.checkNow()
+    assert.deepEqual(provider.episodeCalls, [second])
+    assert.equal(notices.length, 1)
+  })
+}
 
 test('the visible root episode count follows validated episodes, retaining it when later metadata is unverified', async (context) => {
   const { monitor, provider } = fixture(context)
