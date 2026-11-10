@@ -125,6 +125,38 @@ async function finishScheduledCheck(monitor: Monitor): Promise<void> {
   assert.equal(monitor.snapshot().checking, false, 'Scheduled check should finish')
 }
 
+test('overlapping daily and full tasks catch a hidden older-season change once and persist completion', async context => {
+  const { monitor, provider, dataPath, notices } = fixture(context)
+  const start = new Date(2026, 10, 9, 8)
+  context.mock.timers.enable({ apis: ['Date'], now: start })
+  provider.add(first, '作品第一季', [episode1])
+  provider.add(second, '作品第二季', [episode2])
+  provider.entries.get(first)!.seasons.push({ id: second, title: '作品第二季', index: 2, episodeCount: 1 })
+  await monitor.follow(first)
+  monitor.saveTask({ name: '全量', enabled: true, time: '09:00', frequency: { kind: 'daily' }, mode: 'full' })
+  monitor.start()
+  provider.episodeCalls.length = 0
+  provider.directoryCalls.length = 0
+  provider.episodes.set(first, [episode1, episode3])
+  context.mock.timers.setTime(new Date(2026, 10, 12, 12).getTime())
+  monitor.resume()
+  await finishScheduledCheck(monitor)
+  assert.deepEqual(provider.directoryCalls, [first])
+  assert.deepEqual(provider.episodeCalls.sort(), [first, second])
+  assert.equal(notices.length, 1)
+  assert.equal(monitor.snapshot().events.length, 1)
+  monitor.stop()
+  const reopened = new Monitor(dataPath, () => {}, () => {}, provider)
+  try {
+    reopened.start()
+    await finishScheduledCheck(reopened)
+    assert.equal(provider.directoryCalls.length, 1)
+    for (const task of reopened.snapshot().tasks) reopened.removeTask(task.id)
+    assert.deepEqual(reopened.snapshot().tasks, [])
+    assert.equal(reopened.snapshot().nextCheckAt, undefined)
+  } finally { reopened.dispose() }
+})
+
 test('following establishes a persisted baseline and notifies only genuinely new episode IDs once', async (context) => {
   const { monitor, provider, notices, dataPath } = fixture(context)
   provider.add(first, '作品一', [episode1])

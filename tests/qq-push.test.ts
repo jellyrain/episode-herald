@@ -145,3 +145,69 @@ test('normal monitoring pushes a newly listed season and its first episodes even
   assert.match(received[0],/新季[\s\S]*预约/)
   assert.match(received[1],/新集[\s\S]*新增 1 集/)
 })
+
+test('official QQ and OneBot independently deliver the same desktop notification with scoped secrets and routes', async t => {
+  const bodies: string[] = [], officialPaths: string[] = []
+  let tokens = 0
+  const { store, push, dir } = fixture(t, async (url, init) => {
+    const payload = JSON.parse(String(init?.body))
+    if (String(url).startsWith('https://bots.qq.com/')) {
+      assert.deepEqual(payload, { appId: '123456', clientSecret: 'sample-secret' })
+      tokens++
+      return Response.json({ access_token: 'sample-token', expires_in: '3600' })
+    }
+    if (String(url).startsWith('https://api.sgroup.qq.com/')) {
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'QQBot sample-token')
+      assert.equal(payload.msg_id, undefined)
+      assert.equal(payload.msg_type, 0)
+      bodies.push(payload.content)
+      officialPaths.push(new URL(String(url)).pathname)
+      return Response.json({ id: 'official-message-id' })
+    }
+    bodies.push(payload.message[0].data.text)
+    return Response.json({ status: 'ok', retcode: 0, data: { message_id: 12 } })
+  })
+  const official = { enabled: true, appId: '123456', secret: 'sample-secret', targetType: 'private', targetId: 'user-openid' } as const
+  push.saveOfficial(official)
+  push.save(config)
+  assert.ok(!JSON.stringify(push.panel()).includes(official.secret))
+  const row = { id: '12345', title: '新番', episodeCount: 1, tags: [] }
+  const provider: MonitorProvider = {
+    async inspect() { return { series: row, seasons: [row], seasonListAvailable: true } },
+    async seasonDirectory() { return { seasons: [row] } },
+    async episodeIds() { return row.episodeCount === 1 ? ['12346'] : ['12346', '12347'] },
+    async details() { return { series: row, seasons: [row] } },
+    async browse() { return { items: [], hasMore: false } }, async filters() { return [] }
+  }
+  const desktop: string[] = []
+  const monitor = new Monitor(dir, () => {}, (title, body) => desktop.push(title + '\n' + body), provider, store)
+  await monitor.follow(row.id)
+  row.episodeCount++
+  await monitor.checkNow()
+  await push.dispatch()
+  assert.equal(desktop.length, 1)
+  assert.deepEqual(bodies, [desktop[0], desktop[0]])
+  push.saveOfficial({ ...official, secret: undefined, targetType: 'group', targetId: 'group-openid' })
+  push.test('official')
+  await settled(push)
+  assert.deepEqual(officialPaths, ['/v2/users/user-openid/messages', '/v2/groups/group-openid/messages'])
+  assert.equal(tokens, 1)
+  assert.equal(push.panel().deliveries.filter(d => d.status === 'sent').length, 3)
+})
+
+test('changing official recipient preserves pending OneBot deliveries and surfaces platform refusals', async t => {
+  const { store, push } = fixture(t, async url => String(url).includes('getAppAccessToken')
+    ? Response.json({ access_token: 'token', expires_in: 3600 })
+    : Response.json({ code: 40034024 }, { status: 403 }))
+  push.save(config)
+  const official = { enabled: true, appId: '123', secret: 'secret', targetType: 'group', targetId: 'group1' } as const
+  push.saveOfficial(official)
+  store.commitCheck(record, [event('both')])
+  push.saveOfficial({ ...official, targetId: 'group2' })
+  assert.deepEqual(store.deliveries().map(row => row.status), ['skipped','pending'])
+  assert.throws(() => push.saveOfficial({ ...official, appId: '456', secret: undefined }), /AppSecret/)
+  push.test('official')
+  await settled(push)
+  assert.equal(store.deliveries()[0].status, 'failed')
+  assert.match(store.deliveries()[0].detail, /40034024/)
+})

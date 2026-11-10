@@ -2,10 +2,13 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scrypt } fro
 import { constants } from 'node:fs'
 import { copyFile, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
-import type { QqPushConfig, WatchView } from '../shared/types'
+import type { OfficialQqConfig, QqPushConfig, WatchView } from '../shared/types'
+import { normalizeOfficial } from './official-qq'
+import { defaultOfficial } from './store'
 import type { BackupRecords, Store } from './store'
 import { normalizeQq, type TokenStorage } from './qq-push'
 import { UserFacingError } from './provider'
+import { validDraft } from './schedule'
 
 // Version 1: magic | 16-byte salt | 12-byte IV | 16-byte GCM tag | encrypted UTF-8 JSON.
 const magic = Buffer.from('EpisodeHerald\x00\x01')
@@ -18,6 +21,7 @@ function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
 }
 
 interface BackupData extends BackupRecords {
+  official?: OfficialQqConfig & { secret: string }
   view: WatchView
   qq: QqPushConfig & { token: string }
   covers: Record<string, string>
@@ -35,6 +39,10 @@ function valid(data: BackupData): boolean {
   if (!object(data) || !['list', 'grid'].includes(data.view) || !object(data.settings) ||
       !object(data.checkState) || !object(data.covers) || !object(data.qq) || !string(data.qq.token)) return false
   const s = data.settings
+  if (data.tasks !== undefined && (!Array.isArray(data.tasks) ||
+      !data.tasks.every(t => validDraft(t) && typeof t.id === 'string' && !!t.id && t.id.length <= 80 &&
+        Number.isSafeInteger(t.startAt) && Number.isFinite(new Date(t.startAt).getTime()) &&
+        optional(t.lastRunAt, count)) || new Set(data.tasks.map(t => t.id)).size !== data.tasks.length)) return false
   if (!['light', 'dark'].includes(s.theme) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.checkTime) ||
       ![s.autoCheck, s.desktopNotifications, s.closeToTray].every(bool) ||
       !optional(data.checkState.lastCheckAt, date) || !optional(data.checkState.lastCheckSummary, string)) return false
@@ -94,11 +102,15 @@ async function collectCovers(dataPath: string): Promise<Record<string, string>> 
 export async function exportBackup(path: string, password: string, view: WatchView, store: Store, tokens: TokenStorage): Promise<void> {
   checkPassword(password)
   const { cipher, ...config } = store.qqConfig()
+  const { cipher: officialCipher, ...official } = store.officialConfig()
+  let secret = ''
+  try { if (officialCipher) secret = tokens.decrypt(officialCipher) }
+  catch { throw new UserFacingError('无法解密官方机器人的 AppSecret，请重新保存后再导出。') }
   let token = ''
   try { if (cipher) token = tokens.decrypt(cipher) }
   catch { throw new UserFacingError('当前 Windows 账户无法读取 QQ Token，请先在推送页重新保存 Token 再导出。') }
   const records = store.backupRecords()
-  const data: BackupData = { ...records, view, qq: { ...config, token }, covers: await collectCovers(store.dataPath) }
+  const data: BackupData = { ...records, view, qq: { ...config, token }, official: { ...official, secret }, covers: await collectCovers(store.dataPath) }
   const plain = Buffer.from(JSON.stringify(data))
   if (plain.length + magic.length + 44 > maxBytes) throw new UserFacingError('备份数据过大。')
   const salt = randomBytes(16), iv = randomBytes(12)
@@ -145,6 +157,10 @@ export async function readBackup(path: string, password: string): Promise<Backup
     const data: BackupData = JSON.parse(plain.toString('utf8'))
     if (!valid(data)) throw Error()
     normalizeQq(data.qq)
+    if (data.official !== undefined) {
+      const official = normalizeOfficial(data.official)
+      if (official.secret === undefined || (official.enabled && !official.secret)) throw Error()
+    }
     return data
   } catch { throw new UserFacingError('备份中的数据格式无效。') }
   finally { plain.fill(0) }
@@ -153,6 +169,12 @@ export async function readBackup(path: string, password: string): Promise<Backup
 export async function restoreBackup(data: BackupData, store: Store, tokens: TokenStorage, assertIdle: () => void): Promise<void> {
   const { token, ...config } = normalizeQq(data.qq)
   let cipher = ''
+  let official = defaultOfficial
+  if (data.official) {
+    const { secret, ...config } = normalizeOfficial(data.official)
+    try { official = { ...config, cipher: secret ? tokens.encrypt(secret) : '' } }
+    catch { throw new UserFacingError('无法加密保存 AppSecret，导入已取消。') }
+  }
   try { if (token) cipher = tokens.encrypt(token) }
   catch { throw new UserFacingError('当前系统无法加密保存 QQ Token，导入已取消。') }
   assertIdle()
@@ -170,7 +192,7 @@ export async function restoreBackup(data: BackupData, store: Store, tokens: Toke
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
     assertIdle()
-    store.restoreRecords(data, { ...config, cipher })
+    store.restoreRecords(data, { ...config, cipher }, official)
   } catch (error) {
     for (const file of added) await unlink(file).catch(() => undefined)
     throw error

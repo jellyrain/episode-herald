@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PushPanel, QqPushConfig } from '../shared/types'
 import { UserFacingError } from './provider'
 import { qqRoute, type SavedQqConfig, type Store } from './store'
+import { OfficialQq, normalizeOfficial, Unconfirmed } from './official-qq'
 
 export interface TokenStorage {
   encrypt(token: string): string
@@ -30,14 +31,15 @@ export function normalizeQq(input: unknown): QqPushConfig & { token?: string } {
   return { enabled: value.enabled, endpoint, targetType: value.targetType as QqPushConfig['targetType'], targetId, token: value.token as string | undefined }
 }
 
-class Unconfirmed extends UserFacingError {}
-
 export class QqPush {
+  private readonly official: OfficialQq
   private running = false
   private stopped = false
 
   constructor(private readonly store: Store, private readonly tokens: TokenStorage,
-    private readonly changed: () => void, private readonly request: typeof fetch = fetch) {}
+    private readonly changed: () => void, private readonly request: typeof fetch = fetch) {
+    this.official = new OfficialQq(cipher => tokens.decrypt(cipher), request)
+  }
 
   get sending(): boolean { return this.running }
 
@@ -50,7 +52,21 @@ export class QqPush {
 
   panel(): PushPanel {
     const { cipher, ...config } = this.store.qqConfig()
-    return { qq: { ...config, hasToken: Boolean(cipher) }, deliveries: this.store.deliveries() }
+    const { cipher: secret, ...official } = this.store.officialConfig()
+    return { qq: { ...config, hasToken: Boolean(cipher) }, official: { ...official, hasSecret: Boolean(secret) }, deliveries: this.store.deliveries() }
+  }
+
+  saveOfficial(input: unknown): PushPanel {
+    const { secret, ...config } = normalizeOfficial(input)
+    const old = this.store.officialConfig()
+    if (old.cipher && old.appId !== config.appId && secret === undefined) throw new UserFacingError('更换 AppID 时请重新填写或清除 AppSecret。')
+    let cipher = old.cipher
+    try { if (secret !== undefined) cipher = secret ? this.tokens.encrypt(secret) : '' }
+    catch { throw new UserFacingError('无法加密保存 AppSecret。') }
+    if (config.enabled && !cipher) throw new UserFacingError('请填写官方机器人的 AppSecret。')
+    this.store.saveOfficial({ ...config, cipher })
+    this.changed()
+    return this.panel()
   }
 
   save(input: unknown): PushPanel {
@@ -92,22 +108,26 @@ export class QqPush {
     return result.data ?? {}
   }
 
-  async checkConnection(): Promise<string> {
+  async checkConnection(channel?: 'official'): Promise<string> {
+    if (channel === 'official') {
+      await this.official.token(this.store.officialConfig())
+      return '官方机器人鉴权成功，可发送测试消息验证接收端。'
+    }
     const data = await this.call(this.store.qqConfig(), 'get_login_info', {})
     if (!/^\d+$/.test(String(data.user_id))) throw new UserFacingError('未获取到机器人 QQ 号，请检查登录状态。')
     return `已连接：${String(data.nickname || 'QQ 机器人')}（${data.user_id}）`
   }
 
-  test(): PushPanel {
-    const config = this.store.qqConfig()
-    if (!config.endpoint || !config.targetId) throw new UserFacingError('请先保存机器人地址和接收对象。')
-    this.store.enqueueQq('test:' + randomUUID(), '测试消息', '【追更小报】这是一条 QQ 推送测试消息。', config, new Date().toISOString())
+  test(channel?: 'official'): PushPanel {
+    const config = channel === 'official' ? this.store.officialConfig() : this.store.qqConfig()
+    if (!config.targetId || ('appId' in config ? !config.appId || !config.cipher : !config.endpoint)) throw new UserFacingError('请先保存机器人配置和接收对象。')
+    this.store.enqueueQq('test:' + (channel === 'official' ? 'official:' : '') + randomUUID(), '测试消息', '【追更小报】这是一条 QQ 推送测试消息。', config, new Date().toISOString())
     void this.dispatch()
     return this.panel()
   }
 
   retry(id: string): PushPanel {
-    const config = this.store.qqConfig()
+    const config = id.startsWith('official:') || id.startsWith('test:official:') ? this.store.officialConfig() : this.store.qqConfig()
     if ((!config.enabled && !id.startsWith('test:')) || !this.store.retryDelivery(id, config)) {
       throw new UserFacingError('无法重试，请确认通道已开启、接收配置与原记录一致。')
     }
@@ -122,20 +142,15 @@ export class QqPush {
       while (!this.stopped) {
         const next = this.store.nextDelivery()
         if (!next) break
-        const config = this.store.qqConfig()
+        const config = next.route.startsWith('official:') ? this.store.officialConfig() : this.store.qqConfig()
         if (next.route !== qqRoute(config) || (!config.enabled && !next.id.startsWith('test:'))) {
           this.store.setDelivery(next.id, 'skipped', '推送配置已更改')
         } else {
           this.store.setDelivery(next.id, 'sending')
           this.changed()
           try {
-            const group = config.targetType === 'group'
-            const data = await this.call(config, group ? 'send_group_msg' : 'send_private_msg', {
-              [group ? 'group_id' : 'user_id']: Number(config.targetId),
-              message: [{ type: 'text', data: { text: next.body } }]
-            })
-            if (!['number','string'].includes(typeof data.message_id)) throw new Unconfirmed('机器人没有返回消息编号。')
-            this.store.setDelivery(next.id, 'sent', `消息编号 ${data.message_id}`)
+            const receipt = 'appId' in config ? await this.official.send(config, next.body) : await this.sendOneBot(config, next.body)
+            this.store.setDelivery(next.id, 'sent', `消息编号 ${receipt}`)
           } catch (error) {
             this.store.setDelivery(next.id, error instanceof Unconfirmed ? 'unknown' : 'failed',
               error instanceof UserFacingError ? error.message : '推送未完成。')
@@ -144,5 +159,14 @@ export class QqPush {
         this.changed()
       }
     } finally { this.running = false }
+  }
+
+  private async sendOneBot(config: SavedQqConfig, body: string): Promise<string> {
+    const group = config.targetType === 'group'
+    const data = await this.call(config, group ? 'send_group_msg' : 'send_private_msg', {
+      [group ? 'group_id' : 'user_id']: Number(config.targetId), message: [{ type: 'text', data: { text: body } }]
+    })
+    if (!['number','string'].includes(typeof data.message_id)) throw new Unconfirmed('机器人没有返回消息编号。')
+    return String(data.message_id)
   }
 }

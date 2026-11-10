@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, IconButton, Spinner, Theme, Tooltip } from '@radix-ui/themes'
-import { Bell, CheckCheck, Compass, Library, Minus, Moon, RefreshCw, Send, Settings as SettingsIcon, Square, Sun, X } from 'lucide-react'
+import { Bell, CalendarClock, CheckCheck, Compass, Library, Minus, Moon, RefreshCw, Send, Settings as SettingsIcon, Square, Sun, X } from 'lucide-react'
 import { productName } from '../../../package.json'
 import newsboy from './assets/newsboy.png'
 import type { Result, SeasonCard, Snapshot } from '../../shared/types'
@@ -11,15 +11,17 @@ import { PageHeader } from './components/PageControls'
 import { Discover } from './components/Discover'
 import { SettingsPage } from './components/SettingsPage'
 import { PushPage } from './components/PushPage'
+import { SchedulePage } from './components/SchedulePage'
 import { SeriesDialog } from './components/SeriesDialog'
 import styles from './App.module.css'
 
-type Page = 'watches' | 'discover' | 'updates' | 'push' | 'settings'
+type Page = 'watches' | 'discover' | 'updates' | 'push' | 'schedule' | 'settings'
 const pages = [
   { id: 'watches', label: '我的追更', icon: Library },
   { id: 'discover', label: '发现作品', icon: Compass },
   { id: 'updates', label: '更新记录', icon: Bell },
-  { id: 'push', label: '推送', icon: Send }
+  { id: 'push', label: '推送', icon: Send },
+  { id: 'schedule', label: '调度任务', icon: CalendarClock }
 ] as const
 
 export default function App(): React.JSX.Element {
@@ -27,6 +29,7 @@ export default function App(): React.JSX.Element {
   const [page, setPage] = useState<Page>('watches')
   const [discoveryOpened, setDiscoveryOpened] = useState(false)
   const [pushOpened, setPushOpened] = useState(false)
+  const [scheduleOpened, setScheduleOpened] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -37,6 +40,7 @@ export default function App(): React.JSX.Element {
   const navigate = (next: Page): void => {
     if (next === 'discover') setDiscoveryOpened(true)
     if (next === 'push') setPushOpened(true)
+    if (next === 'schedule') setScheduleOpened(true)
     setPage(next)
   }
   const openSeries = (id: string): void => { setError(''); setDetailHistory([{ id }]) }
@@ -139,9 +143,9 @@ export default function App(): React.JSX.Element {
           <main ref={mainRef} className={styles.main}>
             {error && <ErrorBanner>{error}</ErrorBanner>}
             {!snapshot ? <EmptyState title={error ? '暂时无法读取追更空间' : '正在打开追更空间'} action={error ? <Button variant="soft" onClick={() => void refresh()}>重新加载</Button> : <Spinner />}>你的作品和检查记录保存在本机。</EmptyState> : <>
-              {page === 'watches' && <WatchList snapshot={snapshot} busy={checking} onDiscover={() => navigate('discover')} onOpen={openSeries} onCheck={id => void mutate(() => window.hongguo.checkNow(id))} onToggle={(id, paused) => void mutate(() => window.hongguo.updateWatch(id, { paused }))} onRemove={id => void mutate(() => window.hongguo.removeWatch(id), '已取消追更。')} />}
-              {discoveryOpened && <div hidden={page !== 'discover'}><Discover watches={snapshot.watches} busy={checking} onOpen={openSeries} onFollow={follow} /></div>}
-              {page === 'updates' && <>
+              {page === 'watches' && <section><WatchList snapshot={snapshot} busy={checking} onDiscover={() => navigate('discover')} onOpen={openSeries} onCheck={id => void mutate(() => window.hongguo.checkNow(id))} onToggle={(id, paused) => void mutate(() => window.hongguo.updateWatch(id, { paused }))} onRemove={id => void mutate(() => window.hongguo.removeWatch(id), '已取消追更。')} /></section>}
+              {discoveryOpened && <section hidden={page !== 'discover'}><Discover watches={snapshot.watches} busy={checking} onOpen={openSeries} onFollow={follow} /></section>}
+              {page === 'updates' && <section>
                 <PageHeader title="更新记录" detail={snapshot.events.length + ' 条记录 · ' + unread + ' 条未读'}>
                   <Button variant="surface" disabled={busy || unread === 0}
                     onClick={() => void mutate(() => window.hongguo.markRead(), '已标记全部已读。')}>
@@ -168,21 +172,24 @@ export default function App(): React.JSX.Element {
                     ))}
                   </div>
                 )}
-              </>}
-              {pushOpened && <div hidden={page !== 'push'}><PushPage desktop={snapshot.settings.desktopNotifications} busy={busy}
-                setDesktop={value => void mutate(() => window.hongguo.saveSettings({ ...snapshot.settings, desktopNotifications: value }), '桌面通知设置已保存。')} /></div>}
-              <div hidden={page !== 'settings'}><SettingsPage visible={page === 'settings'} settings={snapshot.settings} dataPath={snapshot.dataPath} busy={busy}
-                onRestored={() => { setPushOpened(false); setDiscoveryOpened(false); void refresh() }}
-                onSave={settings => mutate(() => window.hongguo.saveSettings(settings), '设置已保存。')} /></div>
+              </section>}
+              {pushOpened && <section hidden={page !== 'push'}><PushPage desktop={snapshot.settings.desktopNotifications} busy={busy}
+                setDesktop={value => void mutate(() => window.hongguo.saveSettings({ ...snapshot.settings, desktopNotifications: value }), '桌面通知设置已保存。')} /></section>}
+              {scheduleOpened && <section hidden={page !== 'schedule'}><SchedulePage tasks={snapshot.tasks} busy={checking}
+                saveTask={(task, id) => mutate(() => window.hongguo.saveTask(task, id), '调度任务已保存。')}
+                removeTask={id => mutate(() => window.hongguo.removeTask(id), '调度任务已删除。')} /></section>}
+              <section hidden={page !== 'settings'}><SettingsPage visible={page === 'settings'} settings={snapshot.settings} dataPath={snapshot.dataPath} busy={busy}
+                onRestored={() => { setPushOpened(false); setScheduleOpened(false); setDiscoveryOpened(false); void refresh() }}
+                onSave={settings => mutate(() => window.hongguo.saveSettings(settings), '设置已保存。')} /></section>
             </>}
 
           </main>
         </div>
       </div>
       {snapshot && <footer className={styles.statusbar}>
-        <span><i data-active={snapshot.settings.autoCheck} />
-          {snapshot.checking ? '正在检查更新…' : snapshot.settings.autoCheck
-            ? snapshot.nextCheckAt ? '下次检查 ' + dateTime(snapshot.nextCheckAt) : '每天 ' + snapshot.settings.checkTime + ' 自动检查'
+        <span><i data-active={snapshot.tasks.some(task => task.enabled)} />
+          {snapshot.checking ? '正在检查更新…' : snapshot.tasks.some(task => task.enabled)
+            ? snapshot.nextCheckAt ? '下次检查 ' + dateTime(snapshot.nextCheckAt) : '等待追更作品'
             : '自动检查已暂停'}
         </span>
         <span>{snapshot.lastCheckAt && '上次检查 ' + dateTime(snapshot.lastCheckAt)} {snapshot.lastCheckSummary}</span>

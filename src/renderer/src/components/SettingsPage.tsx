@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Button, Switch, TextField } from '@radix-ui/themes'
+import { Button, Switch } from '@radix-ui/themes'
 import { Save } from 'lucide-react'
 import { Choices, PageHeader } from './PageControls'
 import { CacheSection } from './CacheSection'
@@ -66,11 +66,10 @@ export function SettingsPage({ visible, settings, dataPath, busy, onSave, onRest
   const draft = { ...settings, ...patch }
   const dirty = Object.entries(patch).some(([key, value]) => settings[key as keyof Settings] !== value)
   const update = <K extends keyof Settings>(key: K, value: Settings[K]): void => setPatch(current => ({ ...current, [key]: value }))
-  const validTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.checkTime)
 
   return <>
     <PageHeader title="软件设置">
-      <Button disabled={!dirty || busy || !validTime} onClick={async () => {
+      <Button disabled={!dirty || busy} onClick={async () => {
         if (await onSave(draft)) setPatch({})
       }}><Save size={15} />保存设置</Button>
     </PageHeader>
@@ -78,16 +77,7 @@ export function SettingsPage({ visible, settings, dataPath, busy, onSave, onRest
       <SoftwareUpdate />
       <section>
         <h2>检查计划</h2>
-        <div>
-          <SettingRow id="auto-check-label" label="每天自动检查" hint="按本机时间检查追更中的作品。">
-            <Switch checked={draft.autoCheck} onCheckedChange={value => update('autoCheck', value)}
-              aria-labelledby="auto-check-label" disabled={busy} />
-          </SettingRow>
-          <SettingRow id="time-label" label="检查时间" hint="错过计划时，启动应用或唤醒电脑后会补查一次。">
-            <TextField.Root type="time" aria-label="每日检查时间" value={draft.checkTime}
-              onChange={event => update('checkTime', event.target.value)} disabled={!draft.autoCheck || busy} />
-          </SettingRow>
-        </div>
+        <p>在侧栏的「调度任务」中设置自动检查的时间、频率和检查方式。</p>
       </section>
       <section>
         <h2>窗口</h2>
@@ -116,7 +106,7 @@ export function SettingsPage({ visible, settings, dataPath, busy, onSave, onRest
       {visible && <><BackupSection busy={busy} onRestored={() => { setPatch({}); onRestored() }} /><CacheSection /></>}
     </div>
     {dirty && <div className={styles.draftBar} role="status">
-      <span>{validTime ? '有未保存的设置' : '请填写有效的检查时间。'}</span>
+      <span>有未保存的设置</span>
       <Button variant="ghost" color="gray" disabled={busy} onClick={() => setPatch({})}>放弃修改</Button>
     </div>}
   </>

@@ -82,6 +82,8 @@
 .preferences .navItem { flex: 1; min-width: 0; }
 .mainShell { display: flex; min-width: 0; min-height: 0; }
 .main { flex: 1; min-width: 0; min-height: 0; padding: 22px 26px 26px; overflow: auto; }
+/* The shell owns page width and gutters. Page components supply the header and content as siblings. */
+.main > section { inline-size: 100%; min-inline-size: 0; }
 .pageHeading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; min-height: 42px; }
 .pageHeading h1 { margin: 0; font-size: 23px; font-weight: 600; line-height: 1.4; letter-spacing: .3px; }
 .pageHeading p { margin: 3px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }

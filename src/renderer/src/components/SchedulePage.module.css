@@ -1,0 +1,26 @@
+.card { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.formTitle { margin: 0; padding: 18px 24px; border-bottom: 1px solid var(--line); font-size: 16px; }
+.fields { display: grid; gap: 18px; padding: 22px 24px 26px; }
+.row { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 16px; align-items: start; font-size: 13px; }
+.row > label, .row > span { padding-block: 6px; font-weight: 500; }
+.nameInput { width: min(100%, 380px); }
+.shortInput { width: min(100%, 150px); }
+.hint { margin: 7px 0 0; font-size: 12px; color: var(--muted); }
+.divider { border-top: 1px solid var(--line); }
+.days { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 32px; }
+.formActions { display: flex; align-items: center; justify-content: flex-end; gap: 20px; border-top: 1px solid var(--line); padding: 16px 24px; }
+.formActions button { min-width: 80px; }
+.tasks { width: 100%; border-collapse: collapse; text-align: start; font-size: 13px; }
+.tasks th, .tasks td { padding: 15px 18px; text-align: start; }
+.tasks th { padding-block: 11px; background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 500; }
+.tasks td { border-top: 1px solid var(--line); }
+.tasks td:first-child { width: 35%; overflow-wrap: anywhere; }
+.tasks strong { font-size: 14px; }
+.tasks small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.tasks time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tasks th:last-child, .tasks td:last-child { width: 1%; }
+.taskActions { display: flex; width: max-content; gap: 12px; align-items: center; }
+@media (max-width: 1000px) {
+  .tasks th, .tasks td { padding-inline: 12px; }
+  .tasks td:first-child { width: 29%; }
+}

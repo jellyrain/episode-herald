@@ -9,8 +9,12 @@
 .secret, .actions { display: flex; align-items: center; gap: 10px; }
 .secret > :first-child { flex: 1; min-width: 0; }
 .actions { flex-wrap: wrap; }
-.panel .feedback { margin-top: 12px; color: var(--success); }
+.content .feedback { margin-top: 12px; color: var(--success); }
+.providers { margin-bottom: 12px; }
 .history { margin-top: 16px; }
+.history > summary { cursor: pointer; font-size: 15px; font-weight: 600; }
+.history > summary small { color: var(--muted); margin-left: 6px; font-weight: 400; }
+.historyList { max-height: 340px; overflow-y: auto; margin-top: 10px; padding-right: 8px; }
 .history > p { padding: 10px 0 2px; }
 .delivery { display: flex; align-items: baseline; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .delivery:last-child { padding-bottom: 0; border-bottom: 0; }

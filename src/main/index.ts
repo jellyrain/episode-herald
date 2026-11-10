@@ -222,6 +222,8 @@ function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdat
     })
   }
   handle('snapshot', () => service.snapshot())
+  handle('save-task', (task, id) => service.saveTask(task, id === undefined ? undefined : text(id, 80)))
+  handle('remove-task', id => service.removeTask(text(id, 80)))
   let transferring = false
   async function transfer<T>(action: () => Promise<T>): Promise<T> {
     if (transferring) throw new UserFacingError('另一项导入或导出正在进行。')
@@ -268,8 +270,9 @@ function registerIpc(service: Monitor, updates: ReturnType<typeof createAppUpdat
   handle('cache-clear', updates.clearCache)
   handle('push-panel', () => push.panel())
   handle('save-qq', value => push.save(value))
-  handle('check-qq', () => push.checkConnection())
-  handle('test-qq', () => push.test())
+  handle('save-official-qq', value => push.saveOfficial(value))
+  handle('check-qq', channel => push.checkConnection(channel === 'official' ? channel : undefined))
+  handle('test-qq', channel => push.test(channel === 'official' ? channel : undefined))
   handle('retry-qq', id => push.retry(text(id)))
   handle('app-update-status', updates.status)
   handle('app-update-check', updates.check)

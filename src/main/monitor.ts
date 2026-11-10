@@ -1,16 +1,19 @@
-import { createHash } from 'node:crypto'
-import type { BrowsePage, BrowseQuery, FilterRow, SeasonCard, SeriesDetails, Settings, Snapshot, UpdateEvent } from '../shared/types'
+import { createHash, randomUUID } from 'node:crypto'
+import type { BrowsePage, BrowseQuery, FilterRow, ScheduledTask, SeasonCard, SeriesDetails, Settings, Snapshot, TaskDraft, UpdateEvent, WatchItem } from '../shared/types'
 import { orderedSeasons, releasedSeasonFor, seasonNumber } from '../shared/seasons'
 import { Provider, toUserMessage, UserFacingError, validateId, type Inspection } from './provider'
-import { Store, type SeasonState, type WatchRecord } from './store'
+import { Store, updateNotification, type SeasonState, type WatchRecord } from './store'
+import { firstStart, taskWindow, validDraft } from './schedule'
 
-/** Last scheduled local time, including the previous day before today's scheduled hour. */
-export function latestDueTime(now: Date, time: string): Date {
-  const [hours, minutes] = time.split(':').map(Number)
-  const due = new Date(now)
-  due.setHours(hours, minutes, 0, 0)
-  if (due.getTime() > now.getTime()) due.setDate(due.getDate() - 1)
-  return due
+function taskPlan(task: ScheduledTask, active: WatchItem[], now: number): { task: ScheduledTask; items: WatchItem[]; nextAt?: number } {
+  const window = taskWindow(task, now)
+  const due = window.due
+  // The migrated daily check keeps the previous per-work catch-up behavior.
+  const pending = task.enabled && due !== undefined &&
+    ((task.startAt === 0 && task.mode === 'changes') || task.lastRunAt === undefined || task.lastRunAt < due)
+  const items = pending ? active.filter(item => task.mode === 'full' ||
+    !item.lastCheckedAt || Date.parse(item.lastCheckedAt) < due) : []
+  return { task, items, nextAt: task.enabled ? (items.length ? now : window.next) : undefined }
 }
 
 /** Never accept a truncated response as the new baseline or notify from it. */
@@ -99,18 +102,12 @@ export class Monitor {
       reservationSeasons: Object.values(seasons).filter(season => season.awaitingPremiere && !season.missingFromDirectory)
         .map(({ id, index }) => ({ id, index }))
     }))
-    let nextCheckAt: string | undefined
-    if (settings.autoCheck && watches.some((item) => !item.paused)) {
-      const now = new Date()
-      const due = latestDueTime(now, settings.checkTime)
-      const overdue = watches.some((item) => !item.paused && (!item.lastCheckedAt || new Date(item.lastCheckedAt) < due))
-      if (overdue && !this.checking) nextCheckAt = now.toISOString()
-      else {
-        due.setDate(due.getDate() + 1)
-        nextCheckAt = due.toISOString()
-      }
-    }
-    return { watches, events: this.store.events(), settings, checking: this.checking, nextCheckAt, dataPath: this.dataPath, ...this.store.checkState() }
+    const now = Date.now()
+    const active = watches.filter(item => !item.paused)
+    const tasks = this.store.tasks().map(task => ({ ...task, nextAt: taskPlan(task, active, now).nextAt }))
+    const next = Math.min(...tasks.flatMap(task => task.nextAt === undefined ? [] : [task.nextAt]))
+    const nextCheckAt = active.length && Number.isFinite(next) ? new Date(next).toISOString() : undefined
+    return { watches, tasks, events: this.store.events(), settings, checking: this.checking, nextCheckAt, dataPath: this.dataPath, ...this.store.checkState() }
   }
 
   browse(query: BrowseQuery): Promise<BrowsePage> {
@@ -215,7 +212,31 @@ export class Monitor {
     return this.snapshot()
   }
 
-  private async runChecks(records: WatchRecord[], checkAllSeasons = false): Promise<void> {
+  saveTask(input: unknown, id?: string): Snapshot {
+    this.assertIdle()
+    const draft = input as TaskDraft
+    if (!validDraft(draft)) throw new UserFacingError('请检查任务名称、时间和执行频率。')
+    const tasks = this.store.tasks()
+    const old = tasks.find(t => t.id === id)
+    if (id !== undefined && !old) throw new UserFacingError('任务已被删除。')
+    const { enabled, mode, time, frequency } = draft
+    const unchanged = old && old.enabled === enabled && old.mode === mode && old.time === time &&
+      JSON.stringify(old.frequency) === JSON.stringify(frequency)
+    const task: ScheduledTask = { id: old?.id ?? randomUUID(), name: draft.name.trim(), enabled, mode, time, frequency,
+      startAt: unchanged ? old.startAt : firstStart(draft, Date.now()), lastRunAt: unchanged ? old.lastRunAt : undefined }
+    this.store.saveTasks(old ? tasks.map(t => t.id === id ? task : t) : [...tasks, task])
+    this.onChanged()
+    return this.snapshot()
+  }
+
+  removeTask(id: string): Snapshot {
+    this.assertIdle()
+    this.store.saveTasks(this.store.tasks().filter(task => task.id !== id))
+    this.onChanged()
+    return this.snapshot()
+  }
+
+  private async runChecks(records: WatchRecord[], checkAllSeasons = false, tasks: ScheduledTask[] = []): Promise<void> {
     if (this.checking) return
     this.checking = true
     this.onChanged()
@@ -234,6 +255,11 @@ export class Monitor {
         lastCheckAt: new Date().toISOString(),
         lastCheckSummary: `已检查 ${completed} 部作品，发现 ${changes} 条更新${failures ? `，${failures} 部需要重试` : ''}。`
       })
+      if (tasks.length) {
+        const completedAt = Date.now()
+        const ids = new Set(tasks.map(task => task.id))
+        this.store.saveTasks(this.store.tasks().map(task => ids.has(task.id) ? { ...task, lastRunAt: completedAt } : task))
+      }
     } finally {
       this.checking = false
       this.onChanged()
@@ -385,7 +411,10 @@ export class Monitor {
     if (added.length) this.onNewEvents?.()
     if (added.length && this.store.settings().desktopNotifications) {
       // The persistent event list is authoritative; a failed OS toast cannot roll it back.
-      try { this.onNotify(`${record.item.series.title} 有更新`, added.map((event) => `${event.title}：${event.message}`).join('\n').slice(0, 350)) } catch { /* Notification delivery can be disabled by Windows. */ }
+      for (const event of added) {
+        const { title, body } = updateNotification(event)
+        try { this.onNotify(title, body) } catch { /* Notification delivery can be disabled by Windows. */ }
+      }
     }
     return { failed: errors.length > 0, events: added.length }
   }
@@ -412,12 +441,14 @@ export class Monitor {
 
   resume(): void {
     if (this.stopped || this.checking) return
-    const settings = this.store.settings()
-    if (!settings.autoCheck) return
-    const due = latestDueTime(new Date(), settings.checkTime)
-    const records = this.store.watches().filter((record) => !record.item.paused && (!record.item.lastCheckedAt || new Date(record.item.lastCheckedAt) < due))
-    if (!records.length) return
-    void this.runChecks(records).catch((error: unknown) => {
+    const records = this.store.watches().filter(record => !record.item.paused)
+    const active = records.map(record => record.item)
+    const now = Date.now()
+    const due = this.store.tasks().map(task => taskPlan(task, active, now)).filter(plan => plan.items.length)
+    if (!due.length) return
+    const ids = new Set(due.flatMap(plan => plan.items.map(item => item.id)))
+    void this.runChecks(records.filter(record => ids.has(record.item.id)),
+      due.some(plan => plan.task.mode === 'full'), due.map(plan => plan.task)).catch((error: unknown) => {
       this.store.saveCheckState({ lastCheckAt: new Date().toISOString(), lastCheckSummary: toUserMessage(error) })
       this.onChanged()
     })

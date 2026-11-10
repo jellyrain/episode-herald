@@ -5,6 +5,7 @@ import type { DeliveryStatus, PushPanel, QqPushDraft } from '../../../shared/typ
 import { dateTime, messageOf, unwrap } from '../lib'
 import { Choices, PageHeader } from './PageControls'
 import { ErrorBanner } from './Common'
+import { OfficialQqPanel } from './OfficialQqPanel'
 import styles from './PushPage.module.css'
 
 const statuses: Record<DeliveryStatus, string> = { pending: '待发送', sending: '发送中', sent: '已发送',
@@ -17,6 +18,7 @@ export function PushPage({ desktop, busy, setDesktop }: {
   const [patch, setPatch] = useState<Partial<QqPushDraft>>({})
   const [working, setWorking] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const [channel, setChannel] = useState<'onebot' | 'official'>('onebot')
   const [error, setError] = useState('')
   const revision = useRef(0)
   const load = useCallback(async () => {
@@ -28,7 +30,7 @@ export function PushPage({ desktop, busy, setDesktop }: {
   }, [])
   useEffect(() => {
     const unsubscribe = window.hongguo.onPushChanged(() => void load())
-    void load()
+    void Promise.resolve().then(load)
     return () => { revision.current++; unsubscribe() }
   }, [load])
   const draft = panel ? { ...panel.qq, ...patch } : null
@@ -57,7 +59,10 @@ export function PushPage({ desktop, busy, setDesktop }: {
       <Tabs.Content value="qq" className={styles.content}>
         {error && <ErrorBanner>{error}</ErrorBanner>}
         {!draft || !panel ? <Button variant="soft" onClick={() => void load()}>重新加载配置</Button> : <>
-          <section className={styles.panel}>
+          <div className={styles.providers}><Choices label="QQ 机器人接入方式" value={channel} disabled={working}
+            options={[{ value: 'onebot', label: 'OneBot' }, { value: 'official', label: 'QQ 官方机器人' }]}
+            onChange={value => { setChannel(value); setFeedback(''); setError('') }} /></div>
+          <div hidden={channel !== 'onebot'}><section className={styles.panel}>
             <div className={styles.channelHeader}>
               <div><h2 id="qq-enabled">QQ 机器人推送</h2><p>发现新季或新集时，通过 OneBot 机器人发送消息。</p></div>
               <Switch aria-labelledby="qq-enabled" disabled={working} checked={draft.enabled} onCheckedChange={value => edit('enabled', value)} />
@@ -96,19 +101,22 @@ export function PushPage({ desktop, busy, setDesktop }: {
                 onClick={() => void act(async () => { unwrap(await window.hongguo.testQqPush()); return '测试消息已提交，可在下方查看结果。' })}>
                 <Send size={14} />发送测试消息</Button>
             </div>
-            {feedback && <p className={styles.feedback} role="status">{feedback}</p>}
-          </section>
-          <section className={styles.history}>
-            <h2>最近推送</h2>
+          </section></div>
+          <div hidden={channel !== 'official'}><OfficialQqPanel config={panel.official} act={act} working={working} /></div>
+          {feedback && <p className={styles.feedback} role="status">{feedback}</p>}
+          <details className={styles.history}>
+            <summary>最近推送 <small>{panel.deliveries.length} 条</small></summary>
+            <div className={styles.historyList}>
             {!panel.deliveries.length ? <p>还没有 QQ 推送记录。</p> : panel.deliveries.map(row =>
               <article key={row.id} className={styles.delivery}>
                 <span className={styles.status} data-status={row.status}>{statuses[row.status]}</span>
                 <div><details className={styles.message}><summary>{row.title}</summary><p>{row.body}</p></details><p>{row.recipient} · {dateTime(row.createdAt)}</p>
                   {row.detail && <p>{row.detail}</p>}</div>
-                {row.status === 'failed' && <Button size="1" variant="ghost" disabled={working || dirty}
+                {row.status === 'failed' && <Button size="1" variant="ghost" disabled={working}
                   onClick={() => void act(async () => { unwrap(await window.hongguo.retryQqPush(row.id)); return '已提交重试。' })}><RefreshCw size={13} />重试</Button>}
               </article>)}
-          </section>
+            </div>
+          </details>
         </>}
       </Tabs.Content>
       <Tabs.Content value="desktop" className={styles.content}>

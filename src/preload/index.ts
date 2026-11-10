@@ -8,8 +8,9 @@ const api: HongguoAPI = {
   clearCache: () => ipcRenderer.invoke('hongguo:cache-clear'),
   pushPanel: () => ipcRenderer.invoke('hongguo:push-panel'),
   saveQqPush: config => ipcRenderer.invoke('hongguo:save-qq', config),
-  checkQqConnection: () => ipcRenderer.invoke('hongguo:check-qq'),
-  testQqPush: () => ipcRenderer.invoke('hongguo:test-qq'),
+  saveOfficialQq: config => ipcRenderer.invoke('hongguo:save-official-qq', config),
+  checkQqConnection: channel => ipcRenderer.invoke('hongguo:check-qq', channel),
+  testQqPush: channel => ipcRenderer.invoke('hongguo:test-qq', channel),
   retryQqPush: id => ipcRenderer.invoke('hongguo:retry-qq', id),
   onPushChanged(listener) {
     const handler = (): void => listener()
@@ -25,6 +26,8 @@ const api: HongguoAPI = {
     return () => ipcRenderer.off('hongguo:app-update', handler)
   },
   snapshot: () => ipcRenderer.invoke('hongguo:snapshot'),
+  saveTask: (task, id) => ipcRenderer.invoke('hongguo:save-task', task, id),
+  removeTask: id => ipcRenderer.invoke('hongguo:remove-task', id),
   browse: (query) => ipcRenderer.invoke('hongguo:browse', query),
   searchCovers: ids => ipcRenderer.invoke('hongguo:search-covers', ids),
   filters: (genre) => ipcRenderer.invoke('hongguo:filters', genre),

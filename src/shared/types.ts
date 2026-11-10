@@ -113,6 +113,25 @@ export interface Settings {
   closeToTray: boolean
 }
 
+export type TaskFrequency =
+  | { kind: 'daily' }
+  | { kind: 'weekly'; days: number[] }
+  | { kind: 'interval'; minutes: number }
+
+export interface TaskDraft {
+  name: string
+  enabled: boolean
+  mode: 'changes' | 'full'
+  time: string
+  frequency: TaskFrequency
+}
+
+export interface ScheduledTask extends TaskDraft {
+  id: string
+  startAt: number
+  lastRunAt?: number
+}
+
 export interface QqPushConfig {
   enabled: boolean
   endpoint: string
@@ -123,6 +142,8 @@ export interface QqPushDraft extends QqPushConfig {
   /** Omitted keeps the saved token; an empty string clears it. */
   token?: string
 }
+export type OfficialQqConfig = Omit<QqPushConfig, 'endpoint'> & { appId: string }
+export type OfficialQqDraft = OfficialQqConfig & { secret?: string }
 export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | 'skipped'
 export interface PushDelivery {
   id: string
@@ -134,11 +155,13 @@ export interface PushDelivery {
   detail: string
 }
 export interface PushPanel {
+  official: OfficialQqConfig & { hasSecret: boolean }
   qq: QqPushConfig & { hasToken: boolean }
   deliveries: PushDelivery[]
 }
 
 export interface Snapshot {
+  tasks: (ScheduledTask & { nextAt?: number })[]
   watches: WatchItem[]
   events: UpdateEvent[]
   settings: Settings
@@ -178,8 +201,9 @@ export interface HongguoAPI {
   clearCache(): Promise<Result<CacheCleanup>>
   pushPanel(): Promise<Result<PushPanel>>
   saveQqPush(config: QqPushDraft): Promise<Result<PushPanel>>
-  checkQqConnection(): Promise<Result<string>>
-  testQqPush(): Promise<Result<PushPanel>>
+  saveOfficialQq(config: OfficialQqDraft): Promise<Result<PushPanel>>
+  checkQqConnection(channel?: 'official'): Promise<Result<string>>
+  testQqPush(channel?: 'official'): Promise<Result<PushPanel>>
   retryQqPush(id: string): Promise<Result<PushPanel>>
   onPushChanged(listener: () => void): () => void
   appUpdateStatus(): Promise<Result<AppUpdate>>
@@ -199,6 +223,8 @@ export interface HongguoAPI {
   checkNow(id?: string): Promise<Result<Snapshot>>
   markRead(): Promise<Result<Snapshot>>
   saveSettings(settings: Settings): Promise<Result<Snapshot>>
+  saveTask(task: TaskDraft, id?: string): Promise<Result<Snapshot>>
+  removeTask(id: string): Promise<Result<Snapshot>>
   onChanged(listener: () => void): () => void
   windowAction(action: 'minimize' | 'maximize' | 'close'): void
 }

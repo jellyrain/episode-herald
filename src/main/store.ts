@@ -1,11 +1,20 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { DeliveryStatus, PushDelivery, QqPushConfig, SeasonCard, Settings, UpdateEvent, WatchItem } from '../shared/types'
+import type { DeliveryStatus, OfficialQqConfig, PushDelivery, QqPushConfig, ScheduledTask, SeasonCard, Settings, UpdateEvent, WatchItem } from '../shared/types'
+import { legacyTask } from './schedule'
+
+export function updateNotification(event: UpdateEvent): { title: string; body: string } {
+  return { title: `【追更小报 · ${event.kind === 'season' ? '新季' : '新集'}】`, body: `《${event.title}》\n${event.message}` }
+}
 
 export interface SavedQqConfig extends QqPushConfig { cipher: string }
 const defaultQq: SavedQqConfig = { enabled: false, endpoint: '', targetType: 'private', targetId: '', cipher: '' }
-export const qqRoute = (config: QqPushConfig): string => JSON.stringify([config.endpoint, config.targetType, config.targetId])
+export interface SavedOfficialConfig extends OfficialQqConfig { cipher: string }
+export const defaultOfficial: SavedOfficialConfig = { enabled: false, appId: '', targetType: 'private', targetId: '', cipher: '' }
+export const qqRoute = (config: QqPushConfig | OfficialQqConfig): string => 'appId' in config
+  ? 'official:' + JSON.stringify([config.appId, config.targetType, config.targetId])
+  : JSON.stringify([config.endpoint, config.targetType, config.targetId])
 
 export interface SeasonState extends SeasonCard {
   awaitingPremiere?: boolean
@@ -31,6 +40,7 @@ export interface CheckState {
 }
 
 export interface BackupRecords {
+  tasks?: ScheduledTask[]
   watches: WatchRecord[]
   events: UpdateEvent[]
   settings: Settings
@@ -125,6 +135,14 @@ export class Store {
     this.setPreference('settings', settings)
   }
 
+  tasks(): ScheduledTask[] {
+    return this.preference('scheduledTasks', [legacyTask(this.settings())])
+  }
+
+  saveTasks(tasks: ScheduledTask[]): void {
+    this.setPreference('scheduledTasks', tasks)
+  }
+
   checkState(): CheckState {
     return this.preference<CheckState>('checkState', {})
   }
@@ -140,11 +158,15 @@ export class Store {
       this.saveWatch(record)
       if (!events.length) return
       const qq = this.qqConfig()
+      const official = this.officialConfig()
       const insert = this.db.prepare('INSERT OR IGNORE INTO events (id, created_at, payload) VALUES (?, ?, ?)')
       for (const event of events) {
         if (!insert.run(event.id, event.createdAt, JSON.stringify(event)).changes) continue
         added.push(event)
-        if (qq.enabled) this.enqueueQq(event.id, event.title, `【追更小报 · ${event.kind === 'season' ? '新季' : '新集'}】\n《${event.title}》\n${event.message}`, qq, event.createdAt)
+        const { title, body } = updateNotification(event)
+        const text = title + '\n' + body
+        if (qq.enabled) this.enqueueQq(event.id, event.title, text, qq, event.createdAt)
+        if (official.enabled) this.enqueueQq('official:' + event.id, event.title, text, official, event.createdAt)
       }
     })
     return added
@@ -155,17 +177,30 @@ export class Store {
   }
 
   saveQq(config: SavedQqConfig): void {
+    this.saveDestination('qqPush', this.qqConfig(), config)
+  }
+
+  officialConfig(): SavedOfficialConfig {
+    return this.preference('officialQq', defaultOfficial)
+  }
+
+  saveOfficial(config: SavedOfficialConfig): void {
+    this.saveDestination('officialQq', this.officialConfig(), config)
+  }
+
+  private saveDestination(key: string, old: SavedQqConfig | SavedOfficialConfig, config: SavedQqConfig | SavedOfficialConfig): void {
     this.transaction(() => {
-      if (!config.enabled || qqRoute(this.qqConfig()) !== qqRoute(config)) {
-        this.db.prepare("UPDATE qq_deliveries SET status='skipped', detail='推送配置已更改' WHERE status='pending'").run()
+      if (!config.enabled || qqRoute(old) !== qqRoute(config)) {
+        this.db.prepare("UPDATE qq_deliveries SET status='skipped', detail='推送配置已更改' WHERE status='pending' AND route=?").run(qqRoute(old))
       }
-      this.setPreference('qqPush', config)
+      this.setPreference(key, config)
     })
   }
 
-  enqueueQq(id: string, title: string, body: string, config: QqPushConfig, time: string): void {
+  enqueueQq(id: string, title: string, body: string, config: QqPushConfig | OfficialQqConfig, time: string): void {
+    const channel = 'appId' in config ? '官方机器人 · ' : ''
     this.db.prepare("INSERT INTO qq_deliveries (id,route,title,body,recipient,createdAt,status) VALUES (?,?,?,?,?,?,'pending')")
-      .run(id, qqRoute(config), title, body, (config.targetType === 'group' ? '群 ' : 'QQ ') + config.targetId, time)
+      .run(id, qqRoute(config), title, body, channel + (config.targetType === 'group' ? '群 ' : 'QQ ') + config.targetId, time)
   }
 
   deliveries(): PushDelivery[] {
@@ -180,7 +215,7 @@ export class Store {
     this.db.prepare('UPDATE qq_deliveries SET status=?,detail=? WHERE id=?').run(status, detail, id)
   }
 
-  retryDelivery(id: string, config: QqPushConfig): boolean {
+  retryDelivery(id: string, config: QqPushConfig | OfficialQqConfig): boolean {
     return Boolean(this.db.prepare("UPDATE qq_deliveries SET status='pending', detail='' WHERE id=? AND route=? AND status='failed'").run(id, qqRoute(config)).changes)
   }
 
@@ -199,20 +234,22 @@ export class Store {
 
   backupRecords(): BackupRecords {
     return {
-      watches: this.watches(), events: this.events(), settings: this.settings(), checkState: this.checkState(),
+      watches: this.watches(), events: this.events(), settings: this.settings(), checkState: this.checkState(), tasks: this.tasks(),
       deliveries: this.db.prepare('SELECT * FROM qq_deliveries ORDER BY rowid').all() as unknown as BackupRecords['deliveries']
     }
   }
 
-  restoreRecords(data: BackupRecords, qq: SavedQqConfig): void {
+  restoreRecords(data: BackupRecords, qq: SavedQqConfig, official = defaultOfficial): void {
     this.transaction(() => {
       this.db.exec('DELETE FROM watches; DELETE FROM events; DELETE FROM qq_deliveries;')
       for (const record of data.watches) this.saveWatch(record)
       const event = this.db.prepare('INSERT INTO events (id,created_at,payload) VALUES (?,?,?)')
       for (const row of [...data.events].reverse()) event.run(row.id, row.createdAt, JSON.stringify(row))
       this.saveSettings(data.settings)
+      this.saveTasks(data.tasks ?? [legacyTask(data.settings)])
       this.saveCheckState(data.checkState)
       this.setPreference('qqPush', qq)
+      this.setPreference('officialQq', official)
       const delivery = this.db.prepare('INSERT INTO qq_deliveries (id,route,title,body,recipient,createdAt,status,detail) VALUES (?,?,?,?,?,?,?,?)')
       for (const row of data.deliveries) {
         const uncertain = row.status === 'sending'

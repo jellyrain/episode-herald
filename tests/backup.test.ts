@@ -38,6 +38,8 @@ function setup(t: TestContext): { source: Store; target: Store; file: string } {
 test('encrypted backup restores complete watch state, settings, cached art and a working QQ token on another account', async t => {
   const {source,target,file} = setup(t)
   const route = source.qqConfig()
+  source.saveTasks([{ id: 'weekly', name: '周末复查', enabled: true, mode: 'full', time: '15:20', frequency: { kind: 'weekly', days: [6] }, startAt: Date.now() }])
+  source.saveOfficial({ enabled: true, appId: '123456', targetType: 'private', targetId: 'openid', cipher: 'old-sampleSecret' })
   for (const [id, status] of [['a','sending'],['b','sent'],['c','failed']] as const) {
     source.enqueueQq(id,title,id,route,now)
     source.setDelivery(id,status,'receipt')
@@ -52,6 +54,8 @@ test('encrypted backup restores complete watch state, settings, cached art and a
   assert.deepEqual(target.events(),source.events())
   assert.deepEqual(target.checkState(),source.checkState())
   assert.deepEqual(target.settings(),source.settings())
+  assert.deepEqual(target.tasks(),source.tasks())
+  assert.deepEqual(target.officialConfig(),{...source.officialConfig(), cipher:'new-sampleSecret'})
   assert.deepEqual(target.qqConfig(),{...source.qqConfig(),cipher:'new-secretTOKEN'})
   assert.deepEqual(readFileSync(join(target.dataPath,'covers',thumb)),readFileSync(join(source.dataPath,'covers',thumb)))
   assert.equal(target.nextDelivery(),undefined)
