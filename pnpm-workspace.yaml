@@ -4,3 +4,5 @@ patchedDependencies:
   app-builder-lib@26.18.0: patches/app-builder-lib.patch
 overrides:
   'app-builder-lib@26.18.0>@electron/get': 5.1.0
+minimumReleaseAgeExclude:
+  - openhongguo@0.4.0

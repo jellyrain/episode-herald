@@ -4,7 +4,7 @@
   "packageManager": "pnpm@11.22.0",
   "repository": "https://github.com/jellyrain/episode-herald.git",
   "productName": "追更小报",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "license": "MIT",
   "description": "红果新季与新集追更管理器",
   "main": "./out/main/index.mjs",
@@ -32,7 +32,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "lucide-react": "^1.69.0",
-    "openhongguo": "0.2.0"
+    "openhongguo": "0.4.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.1",
