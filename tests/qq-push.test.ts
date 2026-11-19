@@ -124,6 +124,7 @@ test('normal monitoring pushes a newly listed season and its first episodes even
       return {series:{...season,tags:[]},seasons:related && announced ? [first,next] : [season],seasonListAvailable:related}
     },
     async episodeIds(id) { return id === first.id ? ['20001'] : next.episodeCount ? ['20002'] : [] },
+    async confirmedEpisodeOrder() { assert.fail('unexpected episode revision') },
     async details() { return {series:{...first,tags:[]},seasons:[first]} },
     async browse() {return {items:[],hasMore:false}}, async filters() {return []}
   }
@@ -176,6 +177,7 @@ test('official QQ and OneBot independently deliver the same desktop notification
     async inspect() { return { series: row, seasons: [row], seasonListAvailable: true } },
     async seasonDirectory() { return { seasons: [row] } },
     async episodeIds() { return row.episodeCount === 1 ? ['12346'] : ['12346', '12347'] },
+    async confirmedEpisodeOrder() { assert.fail('unexpected episode revision') },
     async details() { return { series: row, seasons: [row] } },
     async browse() { return { items: [], hasMore: false } }, async filters() { return [] }
   }

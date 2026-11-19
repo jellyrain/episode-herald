@@ -59,6 +59,28 @@ test('routine season lookup takes published counts from one SDK album call and l
   ])
 })
 
+test('episode revisions require the detail total, exact IDs, owner and consecutive episode numbers to agree', async () => {
+  const episodes = [
+    { id: '20002', series_id: root.id, number: 2, playable: true },
+    { id: '20001', series_id: root.id, number: 1, playable: true }
+  ]
+  const detail = { series: { ...root, episode_count: 2 }, episodes }
+  const api = provider({ getSeriesBatch: async ids => { assert.deepEqual(ids, [root.id]); return [detail] } })
+  const listed = new Set(episodes.map(row => row.id))
+  assert.deepEqual(await api.confirmedEpisodeOrder(root.id, listed), ['20001', '20002'])
+  const original = episodes[0]
+  for (const change of [{ id: '20001' }, { id: '20003' }, { number: 3 }, { number: 1 }, { series_id: '10002' }]) {
+    episodes[0] = { ...original, ...change }
+    assert.equal(await api.confirmedEpisodeOrder(root.id, listed), undefined)
+  }
+  episodes[0] = original
+  detail.series.episode_count = 3
+  assert.equal(await api.confirmedEpisodeOrder(root.id, listed), undefined)
+  detail.series.episode_count = 2
+  detail.series.id = '10002'
+  assert.equal(await api.confirmedEpisodeOrder(root.id, listed), undefined)
+})
+
 test('details sort an unnumbered 第五季 after season four, including when that season is selected', async () => {
   const rows = [
     { series_id: '70005', title: '重生之绝世仙帝第五季', index: 0, episode_count: 131 },

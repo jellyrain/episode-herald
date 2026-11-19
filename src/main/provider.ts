@@ -349,4 +349,18 @@ export class Provider {
     }
     throw new UserFacingError('分集列表超过本次检查上限，已保留上次结果。')
   }
+
+  /** Cross-check a changed listing against the numbered episodes and total in the series detail. */
+  async confirmedEpisodeOrder(id: string, listed: Set<string>): Promise<string[] | undefined> {
+    validateId(id)
+    if (!listed.size) return undefined
+    const [detail] = await this.request(client => client.getSeriesBatch([id]))
+    if (detail?.series?.id !== id || detail.series.episode_count !== listed.size ||
+        !Array.isArray(detail.episodes) || detail.episodes.length !== listed.size) return undefined
+
+    const ordered = [...detail.episodes].sort((a, b) => a.number - b.number)
+    const remaining = new Set(listed)
+    if (!ordered.every((episode, i) => episode.series_id === id && episode.number === i + 1 && remaining.delete(episode.id))) return undefined
+    return ordered.map(episode => episode.id)
+  }
 }

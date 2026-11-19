@@ -16,15 +16,6 @@ function taskPlan(task: ScheduledTask, active: WatchItem[], now: number): { task
   return { task, items, nextAt: task.enabled ? (items.length ? now : window.next) : undefined }
 }
 
-/** Never accept a truncated response as the new baseline or notify from it. */
-export function compareEpisodes(previous: string[], current: string[]): string[] {
-  const next = new Set(current)
-  const missing = previous.filter(id => !next.has(id)).length
-  if (missing) throw new UserFacingError(`本次分集明细缺少已收录的 ${missing} 个分集编号，已保留原进度。`)
-  const known = new Set(previous)
-  return [...next].filter((id) => !known.has(id))
-}
-
 function eventId(watchId: string, kind: UpdateEvent['kind'], seriesId: string, ids: string[] = []): string {
   return createHash('sha256').update(JSON.stringify([watchId, kind, seriesId, [...ids].sort()])).digest('hex')
 }
@@ -37,29 +28,38 @@ function hasPublishedEpisodes(season: SeasonState): boolean {
   return season.episodeIds.length > 0 || (season.episodeCount ?? 0) > 0
 }
 
-export type MonitorProvider = Pick<Provider, 'browse' | 'filters' | 'details' | 'inspect' | 'seasonDirectory' | 'episodeIds'>
+export type MonitorProvider = Pick<Provider, 'browse' | 'filters' | 'details' | 'inspect' | 'seasonDirectory' | 'episodeIds' | 'confirmedEpisodeOrder'>
 
 /** An album can swap a reservation ID for its published ID. Resolve all missing rows
  * before changing any of them, so a partial directory cannot erase watch history. */
-function reconcileReservationIds(record: WatchRecord, directory: SeasonCard[], declaredComplete: boolean): boolean {
+function reconcileSeasonDirectory(record: WatchRecord, directory: SeasonCard[], declaredComplete: boolean): boolean {
   const liveIds = new Set(directory.map(season => season.id))
+  // A complete directory containing only established seasons can shrink when a season is delisted.
+  const onlyEstablished = declaredComplete && record.seasonBaselineReady && directory.every(row => {
+    const saved = record.seasons[row.id]
+    return saved && !saved.seasonNoticePending && !saved.missingFromDirectory
+  })
   const hasUnnumberedEntry = directory.some(row => row.id !== record.item.id && row.index === undefined)
   const replacements = new Map<string, SeasonState>()
   const unresolved: SeasonState[] = []
   for (const saved of Object.values(record.seasons)) {
     if (liveIds.has(saved.id)) continue
-    if (saved.id === record.item.id || hasPublishedEpisodes(saved)) return false
+    if (saved.id === record.item.id) return false
+    if (hasPublishedEpisodes(saved)) {
+      if (!onlyEstablished && !saved.missingFromDirectory) return false
+      unresolved.push(saved)
+      continue
+    }
     const release = releasedSeasonFor(saved, directory)
     if (!release) {
-      if (!saved.missingFromDirectory && !(declaredComplete && hasUnnumberedEntry)) return false
+      if (!saved.missingFromDirectory && !onlyEstablished && !(declaredComplete && hasUnnumberedEntry)) return false
       unresolved.push(saved)
       continue
     }
     if (replacements.has(release.id) || release.id === record.item.id) return false
     replacements.set(release.id, saved)
   }
-  // The live IDs determine the displayed total. Keep unresolved reservations out of
-  // that total without attaching their progress to an unnumbered release by position.
+  // Keep absent seasons' history without counting them in the live directory.
   for (const saved of unresolved) saved.missingFromDirectory = true
   for (const [id, reservation] of replacements) {
     const published = record.seasons[id]
@@ -268,7 +268,7 @@ export class Monitor {
 
   private async inspectForCheck(record: WatchRecord): Promise<Inspection> {
     const { id, series, watchSeasons } = record.item
-    const known = Object.keys(record.seasons)
+    const known = Object.values(record.seasons).filter(season => !season.missingFromDirectory)
     let directory: Awaited<ReturnType<Provider['seasonDirectory']>>
     try {
       directory = await this.provider.seasonDirectory(id)
@@ -288,12 +288,28 @@ export class Monitor {
     const byId = new Map(directory.seasons.map(season => [season.id, season]))
     const seasons = orderedSeasons([...byId.values()])
     const complete = byId.has(id) && byId.size >= (directory.expectedCount ?? 0) &&
-      reconcileReservationIds(record, seasons, byId.size === directory.expectedCount)
+      reconcileSeasonDirectory(record, seasons, byId.size === directory.expectedCount)
     return {
       series: { ...series, coverUrl: directory.coverUrl ?? series.coverUrl },
       seasons, seasonListAvailable: complete,
       seasonWarning: complete ? undefined : '本次关联季列表不完整，已保留原有进度，下次检查时重试。'
     }
+  }
+
+  private async reconcileEpisodes(season: SeasonState, ids: string[]): Promise<string[]> {
+    const current = new Set(ids)
+    const missing = season.episodeIds.filter(id => !current.has(id))
+    const known = new Set([...season.episodeIds, ...(season.retiredEpisodeIds ?? [])])
+    let candidates = ids
+    if (missing.length) {
+      const ordered = await this.provider.confirmedEpisodeOrder(season.id, current)
+      if (!ordered) throw new UserFacingError(`本次分集明细缺少已收录的 ${missing.length} 个分集编号，详情未能确认变更，已保留原进度。`)
+      // A new ID at an existing episode number can be a replacement. Only notify for new numbers.
+      candidates = ordered.slice(season.episodeIds.length)
+    }
+    const retired = [...known].filter(id => !current.has(id))
+    season.retiredEpisodeIds = retired.length ? retired : undefined
+    return candidates.filter(id => !known.has(id))
   }
 
   private async checkRecord(record: WatchRecord, existingInspection?: Inspection, checkAllSeasons = false): Promise<{ failed: boolean; events: number }> {
@@ -363,7 +379,7 @@ export class Monitor {
           if (canAwaitPremiere && !ids.length) season.awaitingPremiere = true
           // An omitted count is unknown, not evidence of a zero-episode baseline.
           // Keep the first-publication marker until a nonempty complete response arrives.
-          const freshIds = compareEpisodes(season.episodeIds, ids)
+          const freshIds = await this.reconcileEpisodes(season, ids)
           const added = deferredPremiere ? ids : freshIds
           if ((season.baselineReady || season.firstEpisodesPending) && added.length && !season.seasonNoticePending && !announcedThisCheck.has(season.id)) {
             events.push({ id: eventId(record.item.id, 'episodes', season.id, added), watchId: record.item.id, seriesId: season.id, title: season.title, kind: 'episodes', message: `新增 ${added.length} 集，现有 ${ids.length} 集。`, createdAt: now, read: false })

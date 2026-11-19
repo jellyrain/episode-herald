@@ -55,6 +55,7 @@ function valid(data: BackupData): boolean {
     Object.entries(seasons).every(([key, row]) => id(key) && key === row.id && string(row.title) &&
       bool(row.baselineReady) && optional(row.episodeCount, count) && optional(row.index, count) &&
       [row.awaitingPremiere, row.firstEpisodesPending, row.seasonNoticePending, row.missingFromDirectory].every(v => optional(v, bool)) &&
+      optional(row.retiredEpisodeIds, v => Array.isArray(v) && v.every(id)) &&
       Array.isArray(row.episodeIds) && row.episodeIds.every(id)))) return false
   if (!Array.isArray(data.events) || !data.events.every(e => string(e.id) && id(e.watchId) && id(e.seriesId) &&
     string(e.title) && string(e.message) && date(e.createdAt) && bool(e.read) && ['episodes', 'season'].includes(e.kind))) return false

@@ -54,6 +54,7 @@ test('the watch card distinguishes a baseline, an unread change, a failed rechec
 class FakeProvider implements MonitorProvider {
   readonly entries = new Map<string, { title: string; count?: number; seasons: SeasonCard[]; seasonCount?: number }>()
   readonly episodes = new Map<string, string[]>()
+  readonly confirmedEpisodes = new Map<string, string[]>()
   readonly failures = new Map<string, Error>()
   readonly detailFailures = new Map<string, Error>()
   readonly directoryFailures = new Map<string, Error>()
@@ -103,6 +104,10 @@ class FakeProvider implements MonitorProvider {
     const ids = [...(this.episodes.get(id) ?? [])]
     if (!ids.length && !allowEmpty) throw new UserFacingError('分集列表暂时为空，已保留上次结果。')
     return ids
+  }
+
+  async confirmedEpisodeOrder(id: string): Promise<string[] | undefined> {
+    return this.confirmedEpisodes.get(id)
   }
 }
 
@@ -209,6 +214,41 @@ test('empty, truncated and failed episode responses preserve the baseline and do
   assert.match(monitor.snapshot().events[0].message, /新增 1 集/)
 })
 
+test('confirmed episode revisions survive a restart and only newly appended numbers notify', async context => {
+  const { monitor, provider, notices, dataPath } = fixture(context)
+  provider.add(first, '第一季', [episode1, episode2, episode3])
+  await monitor.follow(first)
+  provider.episodes.set(first, [episode1, episode2])
+  await monitor.checkNow(first)
+  assert.match(monitor.snapshot().watches[0].lastError!, /缺少已收录的 1 个分集编号/)
+  assert.equal(monitor.snapshot().watches[0].knownEpisodeCount, 3)
+  provider.confirmedEpisodes.set(first, [episode1, episode2])
+  const revised = await monitor.checkNow(first)
+  assert.equal(revised.watches[0].lastError, undefined)
+  assert.equal(revised.watches[0].series.episodeCount, 2)
+  assert.equal(notices.length, 0)
+
+  const reopened = new Monitor(dataPath, () => {}, title => notices.push(title), provider)
+  try {
+    provider.episodes.get(first)!.push(episode3)
+    const restored = await reopened.checkNow(first)
+    assert.equal(restored.watches[0].knownEpisodeCount, 3)
+    assert.equal(restored.events.length, 0)
+
+    const replacement = '80001', appended = '80002'
+    provider.episodes.set(first, [appended, episode3, replacement, episode1])
+    provider.confirmedEpisodes.set(first, [episode1, replacement, episode3, appended])
+    await reopened.checkNow(first)
+    assert.match(reopened.snapshot().events[0].message, /新增 1 集，现有 4 集/)
+    provider.episodes.set(first, [episode1, episode2, episode3, '80003'])
+    provider.confirmedEpisodes.set(first, [...provider.episodes.get(first)!])
+    await reopened.checkNow(first)
+    await reopened.checkNow(first)
+    assert.equal(reopened.snapshot().events.length, 1)
+    assert.equal(notices.length, 1)
+  } finally { reopened.dispose() }
+})
+
 test('an announced season is recorded once, then its first published episodes and subsequent episodes are detected', async (context) => {
   const { monitor, provider } = fixture(context)
   provider.add(first, '第一季', [episode1])
@@ -265,6 +305,49 @@ test('a missing season keeps its progress and is checked on return; disabling re
   assert.deepEqual(provider.episodeCalls, [first])
   assert.equal(monitor.snapshot().watches[0].seasonCount, 2)
 })
+
+for (const published of [true, false]) {
+  test(`a delisted ${published ? 'published season' : 'reservation'} keeps its history until it returns`, async context => {
+    const { monitor, provider, dataPath } = fixture(context)
+    provider.add(first, '第一季', [episode1])
+    provider.add(second, '第二季', published ? [episode2] : [])
+    const directory = provider.entries.get(first)!
+    const row = { id: second, title: '第二季', index: 2, episodeCount: published ? 1 : 0 }
+    directory.seasonCount = 2
+    directory.seasons = [row]
+    await monitor.follow(first)
+
+    directory.seasons = []
+    directory.seasonCount = 1
+    const shrunk = await monitor.checkNow(first)
+    assert.equal(shrunk.watches[0].lastError, undefined)
+    assert.equal(shrunk.watches[0].seasonCount, 1)
+    assert.deepEqual(shrunk.watches[0].reservationSeasons, [])
+    assert.equal(shrunk.events.length, 0)
+    const db = new Store(dataPath)
+    try {
+      const absent = db.watch(first)!.seasons[second]
+      assert.equal(absent.missingFromDirectory, true)
+      assert.deepEqual(absent.episodeIds, published ? [episode2] : [])
+    } finally { db.close() }
+
+    provider.directoryFailures.set(first, Object.assign(new Error(), { code: 'ALBUM_UNAVAILABLE' }))
+    const single = await monitor.checkNow(first)
+    assert.equal(single.watches[0].lastError, undefined)
+    assert.equal(single.watches[0].seasonCount, 1)
+    provider.directoryFailures.clear()
+    directory.seasonCount = 2
+    directory.seasons = [row]
+    provider.episodes.get(second)!.push(episode3)
+    row.episodeCount++
+    const restored = await monitor.checkNow(first)
+    assert.equal(restored.watches[0].lastError, undefined)
+    assert.equal(restored.watches[0].seasonCount, 2)
+    assert.deepEqual(restored.events.map(e => e.kind), ['episodes'])
+    assert.match(restored.events[0].message, /新增 1 集/)
+    assert.equal((await monitor.checkNow(first)).events.length, 1)
+  })
+}
 
 test('manual checking of one work does not postpone other daily checks; failed checks are not retried every tick', async (context) => {
   context.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 5, 10, 0) })

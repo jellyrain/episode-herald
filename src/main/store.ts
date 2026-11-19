@@ -18,9 +18,11 @@ export const qqRoute = (config: QqPushConfig | OfficialQqConfig): string => 'app
 
 export interface SeasonState extends SeasonCard {
   awaitingPremiere?: boolean
-  /** Keep an absent reservation for reconciliation when the catalogue supplies a season number. */
+  /** Keep the history of a delisted season in case it returns. */
   missingFromDirectory?: boolean
   episodeIds: string[]
+  /** Previously verified IDs that are absent from the current listing. */
+  retiredEpisodeIds?: string[]
   baselineReady: boolean
   /** Discovered after the initial complete season list, but not yet confirmed in a complete response. */
   seasonNoticePending?: boolean
